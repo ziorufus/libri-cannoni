@@ -1,6 +1,8 @@
 // Client per il backend FastAPI. L'indirizzo arriva da VITE_API_URL.
 
-export const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/+$/, '')
+// Letto al momento del build. Se manca, si usa lo stesso indirizzo del frontend
+// (caso tipico: frontend e backend sullo stesso dominio dietro un reverse proxy).
+export const API_URL = (import.meta.env.VITE_API_URL || window.location.origin).replace(/\/+$/, '')
 
 const TOKEN_KEY = 'lc_token'
 
