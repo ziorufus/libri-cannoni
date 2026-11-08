@@ -32,9 +32,14 @@ async function load() {
   try {
     const b = await api(`/api/admin/books/${props.id}`)
     const first = !book.value
+    // Le modifiche dell'utente si valutano rispetto ai dati PRECEDENTI: se il
+    // campo non era stato toccato, prende il valore nuovo (es. il nome appena
+    // calcolato dal processo in background).
+    const keepName = !first && nameDirty.value
+    const keepNotes = !first && notesDirty.value
     book.value = b
-    if (first || !nameDirty.value) nameDraft.value = b.description || ''
-    if (first || !notesDirty.value) notesDraft.value = b.notes
+    if (!keepName) nameDraft.value = b.description || ''
+    if (!keepNotes) notesDraft.value = b.notes
     if (first || b.phase !== prevPhase) targetPhase.value = b.phase
     prevPhase = b.phase
     error.value = ''
