@@ -66,11 +66,16 @@ def get_db():
         yield db
 
 
+def lock_path(name: str) -> Path:
+    """File di lock accanto al DB (deve stare su un disco locale, non di rete)."""
+    return (_db_file.parent if _db_file else Path(".")) / name
+
+
 @contextmanager
 def init_lock():
     """Lock su file: evita che più worker creino/popolino il DB contemporaneamente."""
-    lock_path = (_db_file.parent if _db_file else Path(".")) / ".init.lock"
-    with open(lock_path, "w") as fh:
+    lock_path_ = lock_path(".init.lock")
+    with open(lock_path_, "w") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
         try:
             yield

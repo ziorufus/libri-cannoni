@@ -1,13 +1,19 @@
 """Processo in background che fa avanzare i libri nelle fasi.
 
-Gira dentro FastAPI (un task asyncio per ogni worker uvicorn). Con più worker
-non ci sono doppie esecuzioni grazie a un lock per libro ("lease") preso con un
-UPDATE condizionale, che SQLite esegue in modo atomico: solo un worker riesce a
-prendere un dato libro. Se un worker muore a metà lavoro, il lease scade e un
-altro worker riprende il libro.
+Gira dentro FastAPI: ogni processo uvicorn avvia il proprio ciclo, ma lavora
+solo il "leader", cioè il processo che possiede un lock esclusivo sul file
+data/.worker.lock (fcntl.flock). Gli altri restano in attesa e riprovano a ogni
+intervallo; se il leader muore (anche con kill -9) il sistema operativo rilascia
+il lock e un altro processo si auto-nomina leader al giro successivo. Quindi,
+con qualunque numero di --workers, c'è un solo lavoro in background alla volta.
+
+Come ulteriore protezione ogni libro viene comunque "prenotato" (lease) con un
+UPDATE condizionale, che SQLite esegue in modo atomico: anche due backend
+avviati per sbaglio non elaborano mai lo stesso libro.
 """
 
 import asyncio
+import fcntl
 import logging
 import os
 import socket
@@ -16,7 +22,7 @@ from datetime import timedelta
 
 from sqlalchemy import and_, or_, select, update
 
-from .db import SessionLocal, utcnow
+from .db import SessionLocal, lock_path, utcnow
 from .models import Book, PhaseRun
 from .phases import ACTIVE_PHASES, PHASES, BookSnapshot, PhaseResult, initial_status
 from .settings_store import DEFINITIONS, get_setting
@@ -40,6 +46,36 @@ class Worker:
         self.id = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
         self._wake = asyncio.Event()
         self._task: asyncio.Task | None = None
+        self._lock_file = None  # aperto e bloccato finché questo processo è leader
+
+    # --- leader ----------------------------------------------------------------
+
+    @property
+    def is_leader(self) -> bool:
+        return self._lock_file is not None
+
+    def _try_become_leader(self) -> bool:
+        if self.is_leader:
+            return True
+        fh = open(lock_path(".worker.lock"), "a+")
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            fh.close()  # c'è già un leader
+            return False
+        fh.seek(0)
+        fh.truncate()
+        fh.write(f"{self.id}\n")  # solo informativo: chi è il leader
+        fh.flush()
+        self._lock_file = fh
+        log.info("Worker %s: sono il leader, elaboro i libri", self.id)
+        return True
+
+    def _resign(self) -> None:
+        if self._lock_file is not None:
+            fcntl.flock(self._lock_file, fcntl.LOCK_UN)
+            self._lock_file.close()
+            self._lock_file = None
 
     # --- ciclo di vita -------------------------------------------------------
 
@@ -54,15 +90,23 @@ class Worker:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        self._resign()
 
     def wake(self) -> None:
-        """Sveglia subito il worker di questo processo (es. dopo un inserimento)."""
+        """Sveglia subito il worker di questo processo (es. dopo un inserimento).
+
+        Ha effetto immediato solo se questo processo è il leader; altrimenti il
+        leader trova il lavoro al suo controllo successivo.
+        """
         self._wake.set()
 
     async def _loop(self) -> None:
+        if not self._try_become_leader():
+            log.info("Worker %s: c'è già un leader, resto in attesa", self.id)
         while True:
             try:
-                await self.tick()
+                if self._try_become_leader():
+                    await self.tick()
             except asyncio.CancelledError:
                 raise
             except Exception:
