@@ -37,6 +37,8 @@ class Book(Base):
     __tablename__ = "books"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    # Nome visualizzato ("Titolo - Autore"), ricavato dal JSON di Claude o scritto a mano
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str] = mapped_column(Text, default="")
     created_by: Mapped[str] = mapped_column(String(320), default="")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

@@ -15,6 +15,8 @@ const error = ref('')
 const actionError = ref('')
 const busy = ref(false)
 
+const nameDraft = ref('')
+const nameDirty = computed(() => book.value && nameDraft.value !== (book.value.description || ''))
 const notesDraft = ref('')
 const notesDirty = computed(() => book.value && notesDraft.value !== book.value.notes)
 const editingOutput = ref(false)
@@ -31,6 +33,7 @@ async function load() {
     const b = await api(`/api/admin/books/${props.id}`)
     const first = !book.value
     book.value = b
+    if (first || !nameDirty.value) nameDraft.value = b.description || ''
     if (first || !notesDirty.value) notesDraft.value = b.notes
     if (first || b.phase !== prevPhase) targetPhase.value = b.phase
     prevPhase = b.phase
@@ -52,6 +55,18 @@ async function act(fn) {
   }
 }
 
+const saveName = () =>
+  act(async () => {
+    book.value = await api(`/api/admin/books/${props.id}`, { method: 'PATCH', body: { description: nameDraft.value } })
+    nameDraft.value = book.value.description || ''
+  })
+
+const nameFromOutput = () =>
+  act(async () => {
+    book.value = await api(`/api/admin/books/${props.id}/name-from-output`, { method: 'POST' })
+    nameDraft.value = book.value.description || ''
+  })
+
 const saveNotes = () =>
   act(async () => {
     book.value = await api(`/api/admin/books/${props.id}`, { method: 'PATCH', body: { notes: notesDraft.value } })
@@ -65,6 +80,7 @@ const saveOutput = () =>
       body: { claude_output: outputDraft.value },
     })
     editingOutput.value = false
+    if (!nameDirty.value) nameDraft.value = book.value.description || ''
   })
 
 const retry = () =>
@@ -116,7 +132,12 @@ onBeforeUnmount(() => clearInterval(timer))
   <div class="mx-auto" style="max-width: 56rem">
     <div class="d-flex align-items-center gap-2 mb-3">
       <RouterLink :to="{ name: 'books' }" class="btn btn-sm btn-light"><i class="bi bi-arrow-left"></i></RouterLink>
-      <h1 class="h4 mb-0">Libro #{{ id }}</h1>
+      <h1 class="h4 mb-0 text-break">
+        <template v-if="book?.description">
+          {{ book.description }} <span class="text-secondary fs-6 fw-normal">#{{ id }}</span>
+        </template>
+        <template v-else>Libro #{{ id }}</template>
+      </h1>
     </div>
 
     <div v-if="error" class="alert alert-danger">{{ error }}</div>
@@ -164,6 +185,24 @@ onBeforeUnmount(() => clearInterval(timer))
           Inserito {{ fmtDate(book.created_at) }} da {{ book.created_by || '—' }} ·
           cartella <code class="user-select-all">{{ book.folder }}</code>
         </div>
+      </div>
+
+      <!-- Nome -->
+      <h2 class="h6 text-uppercase text-secondary">Nome</h2>
+      <div class="input-group mb-1">
+        <input
+          v-model="nameDraft"
+          class="form-control"
+          placeholder="Titolo - Autore"
+          @keyup.enter="nameDirty && saveName()"
+        />
+        <button class="btn btn-primary" :disabled="!nameDirty || busy" @click="saveName">Salva</button>
+      </div>
+      <div class="mb-4 small">
+        <span class="text-secondary">Ricavato dal JSON di Claude al termine della fase 1.</span>
+        <button v-if="book.claude_output" class="btn btn-link btn-sm p-0 align-baseline" :disabled="busy" @click="nameFromOutput">
+          Ricalcola dal JSON
+        </button>
       </div>
 
       <!-- Foto -->
@@ -248,7 +287,7 @@ onBeforeUnmount(() => clearInterval(timer))
       </BaseModal>
 
       <BaseModal v-if="confirmDelete" title="Eliminare il libro?" @close="confirmDelete = false">
-        Il libro #{{ book.id }} e le sue {{ book.photos.length }} fotografie verranno eliminati definitivamente.
+        Il libro #{{ book.id }}<template v-if="book.description"> ({{ book.description }})</template> e le sue {{ book.photos.length }} fotografie verranno eliminati definitivamente.
         <template #footer>
           <button class="btn btn-light" @click="confirmDelete = false">Annulla</button>
           <button class="btn btn-danger" :disabled="busy" @click="remove">Elimina</button>

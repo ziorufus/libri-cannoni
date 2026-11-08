@@ -90,7 +90,12 @@ onBeforeUnmount(() => clearInterval(timer))
         </div>
         <div class="flex-grow-1 min-w-0" style="min-width: 0">
           <div class="d-flex justify-content-between gap-2">
-            <strong>#{{ b.id }}</strong>
+            <span class="text-break">
+              <strong v-if="b.description">{{ b.description }}</strong>
+              <span class="text-secondary small" :class="{ 'fw-bold text-body fs-6': !b.description }">
+                #{{ b.id }}
+              </span>
+            </span>
             <small class="text-secondary text-nowrap">{{ fmtRelative(b.created_at) }}</small>
           </div>
           <div class="small text-truncate text-secondary">

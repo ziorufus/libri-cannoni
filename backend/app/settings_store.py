@@ -13,20 +13,23 @@ in cambio di un'offerta per Emergency. Le fotografie, nell'ordine in cui sono st
 scattate, sono: {foto}
 
 Esamina tutte le fotografie (copertina, retro, costa, frontespizio, colophon, \
-eventuali difetti) e ricava tutte le informazioni possibili sul libro:
-- titolo e sottotitolo
-- autore/i, curatore, traduttore
-- editore, collana, anno ed edizione/ristampa
-- ISBN (se visibile)
-- lingua, formato, legatura, numero di pagine (se deducibile)
-- stato di conservazione, con i difetti visibili
-- una breve descrizione del contenuto, adatta a un annuncio
+eventuali difetti) e ricava tutte le informazioni possibili sul libro.
 
 Note aggiuntive fornite da chi ha fotografato il libro:
 {note}
 
-Se un'informazione non è ricavabile, scrivilo esplicitamente invece di inventarla. \
-Rispondi in italiano."""
+Rispondi SOLO con un oggetto JSON, senza altro testo, con queste chiavi:
+- "titolo": titolo (e sottotitolo)
+- "autore": autore/i
+- "curatore", "traduttore"
+- "editore", "collana", "anno", "edizione"
+- "isbn": se visibile
+- "lingua", "formato", "legatura", "pagine"
+- "stato": stato di conservazione, con i difetti visibili
+- "descrizione": breve descrizione del contenuto, adatta a un annuncio
+
+Se un'informazione non è ricavabile usa null invece di inventarla. \
+Scrivi i testi in italiano."""
 
 
 @dataclass(frozen=True)
@@ -108,6 +111,23 @@ DEFINITIONS: list[SettingDef] = [
         DEFAULT_CLAUDE_PROMPT,
         "Segnaposto disponibili: {foto} (elenco dei file in ordine) e {note} (note del libro).",
         group="Fase 1 · Claude",
+    ),
+    SettingDef(
+        "json_title_key",
+        "Etichetta JSON del titolo",
+        "str",
+        "titolo",
+        "Chiave del JSON di Claude che contiene il titolo. Ammessi percorsi (es. libro.titolo).",
+        group="Nome del libro",
+    ),
+    SettingDef(
+        "json_author_key",
+        "Etichetta JSON dell'autore",
+        "str",
+        "autore",
+        "Chiave del JSON di Claude che contiene l'autore (se è un elenco, gli autori vengono "
+        "separati da virgole). Il nome del libro diventa \"Titolo - Autore\".",
+        group="Nome del libro",
     ),
 ]
 

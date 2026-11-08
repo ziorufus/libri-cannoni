@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from ..claude_json import book_name
 from ..db import get_db
 from ..models import Book, Photo
 from ..phases import PHASES, initial_status
@@ -49,6 +50,7 @@ def _book_summary(b: Book) -> dict:
     phase = PHASES.get(b.phase)
     return {
         "id": b.id,
+        "description": b.description,
         "notes": b.notes,
         "created_by": b.created_by,
         "created_at": b.created_at,
@@ -182,8 +184,13 @@ def get_book(book_id: int, db: Session = Depends(get_db), _: CurrentUser = Depen
 
 
 class BookUpdate(BaseModel):
+    description: str | None = None
     notes: str | None = None
     claude_output: str | None = None
+
+
+def _name_from_output(db: Session, output: str | None) -> str | None:
+    return book_name(output, get_setting(db, "json_title_key"), get_setting(db, "json_author_key"))
 
 
 @router.patch("/books/{book_id}")
@@ -198,6 +205,23 @@ def update_book(
         book.notes = body.notes.strip()
     if body.claude_output is not None:
         book.claude_output = body.claude_output
+        # Output corretto a mano: se ora contiene titolo/autore, aggiorna il nome
+        if body.description is None and (name := _name_from_output(db, book.claude_output)):
+            book.description = name
+    if body.description is not None:
+        book.description = body.description.strip() or None
+    db.commit()
+    return _book_detail(_load(db, book_id))
+
+
+@router.post("/books/{book_id}/name-from-output")
+def name_from_output(book_id: int, db: Session = Depends(get_db), _: CurrentUser = Depends(require_admin)):
+    """Ricalcola il nome dal JSON di Claude (es. dopo aver cambiato le etichette)."""
+    book = _load(db, book_id)
+    name = _name_from_output(db, book.claude_output)
+    if not name:
+        raise HTTPException(400, "L'output di Claude non è un JSON valido o non contiene il titolo")
+    book.description = name
     db.commit()
     return _book_detail(_load(db, book_id))
 

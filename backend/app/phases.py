@@ -16,6 +16,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from .claude_json import book_name
 from .config import config
 from .storage import book_dir
 
@@ -114,7 +115,13 @@ async def run_claude(book: BookSnapshot) -> PhaseResult:
         return PhaseResult(False, output=out, error=f"Uscita con codice {proc.returncode}: {err or out}"[:4000])
     if not out:
         return PhaseResult(False, error=f"Risposta vuota. {err}"[:4000])
-    return PhaseResult(True, output=out, updates={"claude_output": out})
+    updates = {"claude_output": out}
+    # Se l'output è un JSON con il titolo, il libro prende il nome "Titolo - Autore".
+    # Se non lo è, la fase riesce comunque e il nome resta vuoto.
+    name = book_name(out, book.settings["json_title_key"], book.settings["json_author_key"])
+    if name:
+        updates["description"] = name
+    return PhaseResult(True, output=out, updates=updates)
 
 
 # --- Registro delle fasi -----------------------------------------------------
