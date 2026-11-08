@@ -242,8 +242,8 @@ onBeforeRouteLeave(() => {
     </div>
 
     <!-- Fotocamera -->
-    <div class="camera rounded-3 overflow-hidden bg-dark position-relative mb-2">
-      <video v-show="stream" ref="video" autoplay playsinline muted class="w-100 d-block"></video>
+    <div class="camera rounded-3 overflow-hidden bg-dark position-relative mb-2 mx-auto" :class="{ 'camera-live': stream }">
+      <video v-show="stream" ref="video" autoplay playsinline muted class="d-block"></video>
       <div v-if="flash" class="camera-flash"></div>
       <div v-if="!stream" class="text-center text-white-50 p-5">
         <div v-if="starting" class="spinner-border mb-2"></div>
@@ -352,9 +352,17 @@ onBeforeRouteLeave(() => {
 </template>
 
 <style scoped>
+/* Il riquadro si adatta al video (niente bande nere) e non supera il 48% dell'altezza
+   dello schermo, così su telefoni piccoli il pulsante di scatto resta visibile. */
+.camera-live {
+  width: fit-content;
+  max-width: 100%;
+}
 .camera video {
-  max-height: 60vh;
-  object-fit: contain;
+  max-width: 100%;
+  max-height: 48vh;
+  width: auto;
+  height: auto;
   background: #000;
 }
 .camera-flash {
