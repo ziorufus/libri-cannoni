@@ -18,7 +18,9 @@ from .config import config
 
 THUMB_SIZE = (480, 480)
 URL_TTL_SECONDS = 6 * 3600
-EXT_BY_FORMAT = {"JPEG": "jpg", "PNG": "png", "WEBP": "webp"}
+# MPO (Multi-Picture Object) è un JPEG con altre immagini accodate (es. mappa di
+# profondità): lo producono alcuni telefoni Android/Samsung. Si legge come JPEG.
+EXT_BY_FORMAT = {"JPEG": "jpg", "MPO": "jpg", "PNG": "png", "WEBP": "webp"}
 
 
 def book_dir(book_id: int) -> Path:
@@ -55,8 +57,23 @@ def inspect_image(data: bytes, index: int) -> tuple[str, int, int]:
     return EXT_BY_FORMAT[fmt], width, height
 
 
-def save_photos(book_id: int, images: list[bytes]) -> list[SavedPhoto]:
-    """Salva le foto originali (byte invariati) e genera le miniature."""
+def fit_max_side(data: bytes, max_side: int) -> bytes:
+    """Ridimensiona a `max_side` pixel sul lato lungo, se serve (JPEG, qualità 90).
+
+    Le foto già entro il limite restano byte per byte come sono arrivate.
+    """
+    with Image.open(io.BytesIO(data)) as img:
+        if max(img.size) <= max_side:
+            return data
+        img = ImageOps.exif_transpose(img)  # l'orientamento EXIF va applicato prima
+        img.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+        out = io.BytesIO()
+        img.convert("RGB").save(out, "JPEG", quality=90, optimize=True)
+        return out.getvalue()
+
+
+def save_photos(book_id: int, images: list[bytes], max_side: int) -> list[SavedPhoto]:
+    """Salva le foto (ridotte a `max_side` se più grandi) e genera le miniature."""
     target = book_dir(book_id)
     thumbs = thumbs_dir(book_id)
     target.mkdir(parents=True, exist_ok=False)
@@ -64,6 +81,8 @@ def save_photos(book_id: int, images: list[bytes]) -> list[SavedPhoto]:
     digits = max(2, len(str(len(images))))
     saved = []
     for position, data in enumerate(images, start=1):
+        inspect_image(data, position)  # valida prima di elaborare
+        data = fit_max_side(data, max_side)
         ext, width, height = inspect_image(data, position)
         filename = f"{position:0{digits}d}.{ext}"
         (target / filename).write_bytes(data)

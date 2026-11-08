@@ -6,6 +6,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { onBeforeRouteLeave, useRouter } from 'vue-router'
 import { uploadForm } from '../../api'
 import BaseModal from '../../components/BaseModal.vue'
+import { loadMeta, meta } from '../../meta'
 import { fmtBytes } from '../../utils'
 
 const router = useRouter()
@@ -86,29 +87,12 @@ async function startCamera() {
   }
 }
 
-// Alcuni browser restituiscono PNG: a piena risoluzione pesano troppo,
-// quindi li ricodifichiamo in JPEG di alta qualità (stessa risoluzione).
-async function toJpeg(blob) {
-  if (blob.type === 'image/jpeg') return blob
-  try {
-    const bmp = await createImageBitmap(blob)
-    const canvas = document.createElement('canvas')
-    canvas.width = bmp.width
-    canvas.height = bmp.height
-    canvas.getContext('2d').drawImage(bmp, 0, 0)
-    bmp.close()
-    return (await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92))) || blob
-  } catch {
-    return blob
-  }
-}
-
 async function grabFrame() {
   // 1) ImageCapture.takePhoto(): risoluzione piena del sensore (Chrome/Android)
   if (imageCapture) {
     try {
       const blob = await imageCapture.takePhoto()
-      if (blob?.size) return toJpeg(blob)
+      if (blob?.size) return blob
     } catch {
       /* non supportato da questo dispositivo: si usa il fotogramma video */
     }
@@ -122,26 +106,48 @@ async function grabFrame() {
   return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92))
 }
 
-async function makeThumb(blob) {
+// Decodifica una volta sola: ridimensiona al lato massimo (impostazione
+// "photo_max_side"), converte in JPEG i formati pesanti (es. PNG) e crea la
+// miniatura. Le foto già JPEG ed entro il limite restano intatte.
+async function processPhoto(blob) {
+  let bmp
   try {
-    const bmp = await createImageBitmap(blob)
-    const scale = Math.min(1, 240 / Math.max(bmp.width, bmp.height))
-    const canvas = document.createElement('canvas')
-    canvas.width = Math.round(bmp.width * scale)
-    canvas.height = Math.round(bmp.height * scale)
-    canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height)
-    const out = { thumb: canvas.toDataURL('image/jpeg', 0.75), width: bmp.width, height: bmp.height }
-    bmp.close()
-    return out
+    bmp = await createImageBitmap(blob)
   } catch {
-    return { thumb: URL.createObjectURL(blob), width: 0, height: 0 }
+    // Formato non decodificabile dal browser: lo manda così com'è, decide il server
+    return { blob, thumb: URL.createObjectURL(blob), width: 0, height: 0 }
+  }
+  try {
+    const maxSide = meta.photo_max_side || Infinity
+    const scale = Math.min(1, maxSide / Math.max(bmp.width, bmp.height))
+    let out = blob
+    let width = bmp.width
+    let height = bmp.height
+    if (scale < 1 || blob.type !== 'image/jpeg') {
+      width = Math.round(bmp.width * scale)
+      height = Math.round(bmp.height * scale)
+      const canvas = document.createElement('canvas')
+      canvas.width = width
+      canvas.height = height
+      const ctx = canvas.getContext('2d')
+      ctx.imageSmoothingQuality = 'high'
+      ctx.drawImage(bmp, 0, 0, width, height)
+      out = (await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9))) || blob
+    }
+    const ts = Math.min(1, 240 / Math.max(width, height))
+    const tc = document.createElement('canvas')
+    tc.width = Math.round(bmp.width * ts * scale)
+    tc.height = Math.round(bmp.height * ts * scale)
+    tc.getContext('2d').drawImage(bmp, 0, 0, tc.width, tc.height)
+    return { blob: out, thumb: tc.toDataURL('image/jpeg', 0.75), width, height }
+  } finally {
+    bmp.close()
   }
 }
 
 let keySeq = 0
 async function addPhoto(blob) {
-  const t = await makeThumb(blob)
-  photos.value.push({ key: ++keySeq, blob, ...t })
+  photos.value.push({ key: ++keySeq, ...(await processPhoto(blob)) })
   await nextTick()
   strip.value?.scrollTo({ left: strip.value.scrollWidth, behavior: 'smooth' })
 }
@@ -215,6 +221,7 @@ const beforeUnload = (e) => {
 }
 
 onMounted(() => {
+  loadMeta().catch(() => {})
   startCamera()
   window.addEventListener('beforeunload', beforeUnload)
 })

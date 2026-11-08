@@ -43,6 +43,17 @@ class SettingDef:
 
 DEFINITIONS: list[SettingDef] = [
     SettingDef(
+        "photo_max_side",
+        "Lato massimo delle foto (pixel)",
+        "int",
+        2048,
+        "Le foto con il lato lungo più grande vengono ridimensionate (prima dell'invio dal "
+        "telefono e comunque dal server). Vale per i libri inseriti da qui in avanti.",
+        min=640,
+        max=12000,
+        group="Fotografie",
+    ),
+    SettingDef(
         "worker_interval_seconds",
         "Intervallo di controllo (secondi)",
         "int",

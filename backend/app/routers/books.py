@@ -12,6 +12,7 @@ from ..db import get_db
 from ..models import Book, Photo
 from ..phases import PHASES, initial_status
 from ..security import CurrentUser, require_admin
+from ..settings_store import get_setting
 from ..storage import (
     InvalidPhoto,
     book_dir,
@@ -97,8 +98,9 @@ def _load(db: Session, book_id: int) -> Book:
 # --- metadati ----------------------------------------------------------------------
 
 @router.get("/meta")
-def meta(_: CurrentUser = Depends(require_admin)):
+def meta(db: Session = Depends(get_db), _: CurrentUser = Depends(require_admin)):
     return {
+        "photo_max_side": get_setting(db, "photo_max_side"),
         "phases": [
             {"number": p.number, "label": p.label, "description": p.description, "automatic": p.handler is not None}
             for p in PHASES.values()
@@ -157,7 +159,7 @@ async def create_book(
     db.add(book)
     db.flush()  # assegna l'ID
     try:
-        saved = save_photos(book.id, images)
+        saved = save_photos(book.id, images, get_setting(db, "photo_max_side"))
     except InvalidPhoto as exc:
         db.rollback()
         delete_book_files(book.id)
