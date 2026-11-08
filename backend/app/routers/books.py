@@ -242,14 +242,29 @@ def update_book(
 
 @router.post("/books/{book_id}/name-from-output")
 def name_from_output(book_id: int, db: Session = Depends(get_db), _: CurrentUser = Depends(require_admin)):
-    """Ricalcola il nome dal JSON di Claude (es. dopo aver cambiato le etichette);
-    se le condizioni sono vuote, prova a riempire anche quelle."""
+    """Ricalcola il nome dal JSON di Claude (es. dopo aver cambiato le etichette)."""
     book = _load(db, book_id)
     name = _name_from_output(db, book.claude_output)
     if not name:
         raise HTTPException(400, "L'output di Claude non è un JSON valido o non contiene il titolo")
     book.description = name
-    _fill_condition_from_output(db, book)
+    db.commit()
+    return _book_detail(_load(db, book_id))
+
+
+@router.post("/books/{book_id}/condition-from-output")
+def condition_from_output(book_id: int, db: Session = Depends(get_db), _: CurrentUser = Depends(require_admin)):
+    """Reimposta le condizioni dal JSON di Claude. È un'azione esplicita dell'admin:
+    sostituisce anche un valore già presente (a differenza della fase 1 automatica)."""
+    book = _load(db, book_id)
+    condition = book_condition(book.claude_output, get_setting(db, "json_condition_key"))
+    if not condition:
+        raise HTTPException(
+            400,
+            "Il JSON di Claude non contiene condizioni valide (servono esattamente "
+            f"{', '.join(BOOK_CONDITIONS)} nella chiave \"{get_setting(db, 'json_condition_key')}\")",
+        )
+    book.condition = condition
     db.commit()
     return _book_detail(_load(db, book_id))
 

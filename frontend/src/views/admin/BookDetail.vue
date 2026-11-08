@@ -77,6 +77,11 @@ const saveCondition = (value) =>
     book.value = await api(`/api/admin/books/${props.id}`, { method: 'PATCH', body: { condition: value } })
   })
 
+const conditionFromOutput = () =>
+  act(async () => {
+    book.value = await api(`/api/admin/books/${props.id}/condition-from-output`, { method: 'POST' })
+  })
+
 const saveNotes = () =>
   act(async () => {
     book.value = await api(`/api/admin/books/${props.id}`, { method: 'PATCH', body: { notes: notesDraft.value } })
@@ -227,12 +232,22 @@ onBeforeUnmount(() => clearInterval(timer))
         <option v-for="c in meta.conditions || []" :key="c" :value="c">{{ c }}</option>
         <option value="">Non indicate (le prende Claude)</option>
       </select>
-      <p class="small text-secondary mb-4">
-        <template v-if="!book.condition">
-          Verranno prese dal JSON di Claude al termine della fase 1, se il valore è valido.
-        </template>
-        <template v-else>Un valore impostato non viene mai sovrascritto da Claude.</template>
-      </p>
+      <div class="small mb-4">
+        <span class="text-secondary">
+          <template v-if="!book.condition">
+            Verranno prese dal JSON di Claude al termine della fase 1, se il valore è valido.
+          </template>
+          <template v-else>La fase 1 automatica non sovrascrive un valore già impostato.</template>
+        </span>
+        <button
+          v-if="book.claude_output"
+          class="btn btn-link btn-sm p-0 ms-1 align-baseline"
+          :disabled="busy"
+          @click="conditionFromOutput"
+        >
+          Ricalcola dal JSON
+        </button>
+      </div>
 
       <!-- Foto -->
       <h2 class="h6 text-uppercase text-secondary">Fotografie ({{ book.photos.length }})</h2>
