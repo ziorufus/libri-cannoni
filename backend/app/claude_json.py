@@ -4,6 +4,8 @@ import json
 import re
 from typing import Any
 
+from .models import BOOK_CONDITIONS
+
 # ```json ... ```  oppure  ``` ... ```  (anche senza a capo)
 _FENCE = re.compile(r"^```[A-Za-z0-9_-]*[ \t]*\n?(.*?)\n?[ \t]*```$", re.DOTALL)
 
@@ -35,6 +37,16 @@ def _lookup(data: dict, key: str) -> str:
     if value is None or isinstance(value, (dict, bool)):
         return ""
     return str(value).strip()
+
+
+def book_condition(output: str | None, key: str) -> str | None:
+    """Condizioni dal JSON, solo se il valore è esattamente uno di quelli ammessi
+    (maiuscole/minuscole e spazi esterni non contano); altrimenti None."""
+    data = parse_output(output)
+    if data is None or not key:
+        return None
+    value = _lookup(data, key).lower()
+    return value if value in BOOK_CONDITIONS else None
 
 
 def book_name(output: str | None, title_key: str, author_key: str) -> str | None:

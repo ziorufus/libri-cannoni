@@ -8,9 +8,9 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from ..claude_json import book_name
+from ..claude_json import book_condition, book_name
 from ..db import get_db
-from ..models import Book, Photo
+from ..models import BOOK_CONDITIONS, Book, Photo
 from ..phases import PHASES, initial_status
 from ..security import CurrentUser, require_admin
 from ..settings_store import get_setting
@@ -51,6 +51,7 @@ def _book_summary(b: Book) -> dict:
     return {
         "id": b.id,
         "description": b.description,
+        "condition": b.condition,
         "notes": b.notes,
         "created_by": b.created_by,
         "created_at": b.created_at,
@@ -103,6 +104,7 @@ def _load(db: Session, book_id: int) -> Book:
 def meta(db: Session = Depends(get_db), _: CurrentUser = Depends(require_admin)):
     return {
         "photo_max_side": get_setting(db, "photo_max_side"),
+        "conditions": list(BOOK_CONDITIONS),
         "phases": [
             {"number": p.number, "label": p.label, "description": p.description, "automatic": p.handler is not None}
             for p in PHASES.values()
@@ -141,11 +143,14 @@ async def create_book(
     request: Request,
     photos: Annotated[list[UploadFile], File()],
     notes: Annotated[str, Form()] = "",
+    # "" = usa il valore di Claude
+    condition: Annotated[str, Form()] = "",
     db: Session = Depends(get_db),
     cu: CurrentUser = Depends(require_admin),
 ):
     if not photos:
         raise HTTPException(400, "Serve almeno una fotografia")
+    condition = _check_condition(condition)
     if len(photos) > MAX_PHOTOS:
         raise HTTPException(400, f"Al massimo {MAX_PHOTOS} fotografie per libro")
 
@@ -157,7 +162,7 @@ async def create_book(
             raise HTTPException(400, f"La foto n. {i} è troppo grande")
         images.append(data)
 
-    book = Book(notes=notes.strip(), created_by=cu.email, phase=0, status="ready")
+    book = Book(notes=notes.strip(), condition=condition, created_by=cu.email, phase=0, status="ready")
     db.add(book)
     db.flush()  # assegna l'ID
     try:
@@ -183,14 +188,31 @@ def get_book(book_id: int, db: Session = Depends(get_db), _: CurrentUser = Depen
     return _book_detail(_load(db, book_id))
 
 
+def _check_condition(value: str | None) -> str | None:
+    """'' o None -> None (usa Claude); altrimenti deve essere un valore ammesso."""
+    value = (value or "").strip().lower()
+    if not value:
+        return None
+    if value not in BOOK_CONDITIONS:
+        raise HTTPException(400, f"Condizioni non valide: usa {', '.join(BOOK_CONDITIONS)}")
+    return value
+
+
 class BookUpdate(BaseModel):
     description: str | None = None
+    # "" = nessun valore (verrà preso da Claude alla prossima esecuzione della fase 1)
+    condition: str | None = None
     notes: str | None = None
     claude_output: str | None = None
 
 
 def _name_from_output(db: Session, output: str | None) -> str | None:
     return book_name(output, get_setting(db, "json_title_key"), get_setting(db, "json_author_key"))
+
+
+def _fill_condition_from_output(db: Session, book: Book) -> None:
+    if not book.condition:
+        book.condition = book_condition(book.claude_output, get_setting(db, "json_condition_key"))
 
 
 @router.patch("/books/{book_id}")
@@ -210,18 +232,24 @@ def update_book(
             book.description = name
     if body.description is not None:
         book.description = body.description.strip() or None
+    if body.condition is not None:
+        book.condition = _check_condition(body.condition)
+    elif body.claude_output is not None:
+        _fill_condition_from_output(db, book)
     db.commit()
     return _book_detail(_load(db, book_id))
 
 
 @router.post("/books/{book_id}/name-from-output")
 def name_from_output(book_id: int, db: Session = Depends(get_db), _: CurrentUser = Depends(require_admin)):
-    """Ricalcola il nome dal JSON di Claude (es. dopo aver cambiato le etichette)."""
+    """Ricalcola il nome dal JSON di Claude (es. dopo aver cambiato le etichette);
+    se le condizioni sono vuote, prova a riempire anche quelle."""
     book = _load(db, book_id)
     name = _name_from_output(db, book.claude_output)
     if not name:
         raise HTTPException(400, "L'output di Claude non è un JSON valido o non contiene il titolo")
     book.description = name
+    _fill_condition_from_output(db, book)
     db.commit()
     return _book_detail(_load(db, book_id))
 

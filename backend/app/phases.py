@@ -16,7 +16,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from .claude_json import book_name
+from .claude_json import book_condition, book_name
 from .config import config
 from .storage import book_dir
 
@@ -42,6 +42,9 @@ class PhaseResult:
     error: str = ""
     # Colonne del libro da aggiornare in caso di successo
     updates: dict[str, Any] = field(default_factory=dict)
+    # Colonne da riempire in caso di successo SOLO se sono vuote nel DB
+    # (es. condizioni: un valore scelto a mano non viene mai sovrascritto)
+    fill_if_empty: dict[str, Any] = field(default_factory=dict)
 
 
 Handler = Callable[[BookSnapshot], Awaitable[PhaseResult]]
@@ -124,7 +127,10 @@ async def run_claude(book: BookSnapshot) -> PhaseResult:
     name = book_name(out, book.settings["json_title_key"], book.settings["json_author_key"])
     if name:
         updates["description"] = name
-    return PhaseResult(True, output=out, updates=updates)
+    fill = {}
+    if condition := book_condition(out, book.settings["json_condition_key"]):
+        fill["condition"] = condition
+    return PhaseResult(True, output=out, updates=updates, fill_if_empty=fill)
 
 
 # --- Registro delle fasi -----------------------------------------------------

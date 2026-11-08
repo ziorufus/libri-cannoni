@@ -5,6 +5,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base, UTCDateTime, utcnow
 
+# Valori ammessi per le condizioni del libro (NULL = non indicate: le prende Claude)
+BOOK_CONDITIONS = ("ottime", "buone", "discrete")
+
 
 class AccessEntry(Base):
     """Whitelist: un indirizzo e-mail esatto oppure un intero dominio."""
@@ -40,6 +43,8 @@ class Book(Base):
     # Nome visualizzato ("Titolo - Autore"), ricavato dal JSON di Claude o scritto a mano
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str] = mapped_column(Text, default="")
+    # Condizioni: uno di BOOK_CONDITIONS, oppure NULL ("usa valore di Claude")
+    condition: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_by: Mapped[str] = mapped_column(String(320), default="")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)

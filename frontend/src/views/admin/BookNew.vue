@@ -24,6 +24,7 @@ let imageCapture = null
 
 const photos = ref([]) // { key, blob, thumb, width, height }
 const notes = ref('')
+const condition = ref('') // '' = usa il valore di Claude
 const preview = ref(null) // { index, url }
 const strip = ref(null)
 
@@ -197,6 +198,7 @@ async function submit() {
   progress.value = 0
   const form = new FormData()
   form.append('notes', notes.value)
+  form.append('condition', condition.value)
   photos.value.forEach((p, i) => {
     const ext = p.blob.type === 'image/png' ? 'png' : 'jpg'
     form.append('photos', p.blob, `foto-${String(i + 1).padStart(2, '0')}.${ext}`)
@@ -313,6 +315,22 @@ onBeforeRouteLeave(() => {
         Fotografa copertina, retro, costa, frontespizio, colophon ed eventuali difetti.
       </template>
     </p>
+
+    <div class="mb-3">
+      <div class="form-label fw-semibold">Condizioni</div>
+      <div role="radiogroup" aria-label="Condizioni">
+        <div class="btn-group w-100 mb-2">
+          <template v-for="opt in meta.conditions || []" :key="opt">
+            <input :id="`cond-${opt}`" v-model="condition" type="radio" class="btn-check" name="condition" :value="opt" />
+            <label class="btn btn-outline-primary text-capitalize" :for="`cond-${opt}`">{{ opt }}</label>
+          </template>
+        </div>
+        <input id="cond-claude" v-model="condition" type="radio" class="btn-check" name="condition" value="" />
+        <label class="btn btn-outline-primary w-100" for="cond-claude">
+          <i class="bi bi-stars me-1"></i>Usa valore di Claude
+        </label>
+      </div>
+    </div>
 
     <div class="mb-3">
       <label for="notes" class="form-label fw-semibold">Note</label>

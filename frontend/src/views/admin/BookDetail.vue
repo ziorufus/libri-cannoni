@@ -72,6 +72,11 @@ const nameFromOutput = () =>
     nameDraft.value = book.value.description || ''
   })
 
+const saveCondition = (value) =>
+  act(async () => {
+    book.value = await api(`/api/admin/books/${props.id}`, { method: 'PATCH', body: { condition: value } })
+  })
+
 const saveNotes = () =>
   act(async () => {
     book.value = await api(`/api/admin/books/${props.id}`, { method: 'PATCH', body: { notes: notesDraft.value } })
@@ -209,6 +214,25 @@ onBeforeUnmount(() => clearInterval(timer))
           Ricalcola dal JSON
         </button>
       </div>
+
+      <!-- Condizioni -->
+      <h2 class="h6 text-uppercase text-secondary">Condizioni</h2>
+      <select
+        class="form-select mb-1 text-capitalize"
+        style="max-width: 20rem"
+        :value="book.condition || ''"
+        :disabled="busy"
+        @change="saveCondition($event.target.value)"
+      >
+        <option v-for="c in meta.conditions || []" :key="c" :value="c">{{ c }}</option>
+        <option value="">Non indicate (le prende Claude)</option>
+      </select>
+      <p class="small text-secondary mb-4">
+        <template v-if="!book.condition">
+          Verranno prese dal JSON di Claude al termine della fase 1, se il valore è valido.
+        </template>
+        <template v-else>Un valore impostato non viene mai sovrascritto da Claude.</template>
+      </p>
 
       <!-- Foto -->
       <h2 class="h6 text-uppercase text-secondary">Fotografie ({{ book.photos.length }})</h2>

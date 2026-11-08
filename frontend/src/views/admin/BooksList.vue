@@ -101,7 +101,12 @@ onBeforeUnmount(() => clearInterval(timer))
           <div class="small text-truncate text-secondary">
             {{ b.notes || 'Nessuna nota' }} · {{ b.photo_count }} foto
           </div>
-          <StatusBadges :book="b" class="mt-1" />
+          <div class="d-flex flex-wrap gap-1 align-items-center mt-1">
+            <StatusBadges :book="b" />
+            <span v-if="b.condition" class="badge rounded-pill text-bg-light border text-capitalize fw-normal">
+              {{ b.condition }}
+            </span>
+          </div>
           <div v-if="b.status === 'waiting' && b.next_attempt_at" class="small text-secondary">
             Nuovo tentativo {{ fmtRelative(b.next_attempt_at) }}
           </div>

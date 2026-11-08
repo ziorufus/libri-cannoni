@@ -27,6 +27,7 @@ Rispondi SOLO con un oggetto JSON, senza altro testo, con queste chiavi:
 - "isbn": se visibile
 - "lingua", "formato", "legatura", "pagine"
 - "stato": stato di conservazione, con i difetti visibili
+- "condizioni": esattamente una di queste parole: "ottime", "buone", "discrete"
 - "descrizione": breve descrizione del contenuto, adatta a un annuncio
 
 Se un'informazione non è ricavabile usa null invece di inventarla. \
@@ -119,7 +120,7 @@ DEFINITIONS: list[SettingDef] = [
         "str",
         "titolo",
         "Chiave del JSON di Claude che contiene il titolo. Ammessi percorsi (es. libro.titolo).",
-        group="Nome del libro",
+        group="Dati dal JSON di Claude",
     ),
     SettingDef(
         "json_author_key",
@@ -128,7 +129,17 @@ DEFINITIONS: list[SettingDef] = [
         "autore",
         "Chiave del JSON di Claude che contiene l'autore (se è un elenco, gli autori vengono "
         "separati da virgole). Il nome del libro diventa \"Titolo - Autore\".",
-        group="Nome del libro",
+        group="Dati dal JSON di Claude",
+    ),
+    SettingDef(
+        "json_condition_key",
+        "Etichetta JSON delle condizioni",
+        "str",
+        "condizioni",
+        "Chiave del JSON di Claude con le condizioni del libro. Viene usata solo se all'inserimento "
+        "è stato scelto \"Usa valore di Claude\", e solo se il valore è esattamente "
+        "\"ottime\", \"buone\" o \"discrete\" (maiuscole/minuscole non contano).",
+        group="Dati dal JSON di Claude",
     ),
 ]
 

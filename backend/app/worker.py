@@ -236,6 +236,11 @@ class Worker:
             if result.ok:
                 for key, value in result.updates.items():
                     setattr(book, key, value)
+                # Controllato qui, al momento del salvataggio: se nel frattempo un
+                # admin ha impostato il valore a mano, quello resta.
+                for key, value in result.fill_if_empty.items():
+                    if getattr(book, key) in (None, ""):
+                        setattr(book, key, value)
                 book.phase = snap.phase + 1
                 book.status = initial_status(book.phase)
                 book.attempts = 0
