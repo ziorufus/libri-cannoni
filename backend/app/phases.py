@@ -53,6 +53,9 @@ class Phase:
     label: str
     description: str
     handler: Handler | None = None
+    # Attesa minima predefinita (secondi) tra la fine di un'esecuzione di questa
+    # fase e l'inizio della successiva; modificabile nelle Impostazioni.
+    min_gap_default: int = 0
 
 
 # --- Fase 0: controllo dell'inserimento -------------------------------------
@@ -130,12 +133,16 @@ PHASES: dict[int, Phase] = {
     p.number: p
     for p in [
         Phase(0, "Inserito", "Libro inserito: controllo delle fotografie.", check_photos),
-        Phase(1, "Analisi Claude", "Invio di foto, prompt e note a `claude -p`.", run_claude),
+        Phase(1, "Analisi Claude", "Invio di foto, prompt e note a `claude -p`.", run_claude, min_gap_default=30),
         Phase(2, "Descritto", "Descrizione ottenuta. In attesa delle fasi successive."),
     ]
 }
 
 ACTIVE_PHASES = [n for n, p in PHASES.items() if p.handler is not None]
+
+
+def min_gap_key(phase: int) -> str:
+    return f"phase_{phase}_min_gap_seconds"
 
 
 def initial_status(phase: int) -> str:

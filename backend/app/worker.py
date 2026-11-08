@@ -17,6 +17,7 @@ import fcntl
 import logging
 import os
 import socket
+import time
 import uuid
 from datetime import timedelta
 
@@ -24,21 +25,21 @@ from sqlalchemy import and_, or_, select, update
 
 from .db import SessionLocal, lock_path, utcnow
 from .models import Book, PhaseRun
-from .phases import ACTIVE_PHASES, PHASES, BookSnapshot, PhaseResult, initial_status
+from .phases import ACTIVE_PHASES, PHASES, BookSnapshot, PhaseResult, initial_status, min_gap_key
 from .settings_store import DEFINITIONS, get_setting
 
 log = logging.getLogger(__name__)
 LEASE_MARGIN_SECONDS = 120
 
 
-def _eligible(now):
+def _eligible(now, phases):
     lease_free = or_(Book.lease_until.is_(None), Book.lease_until < now)
     due = or_(
         Book.status == "ready",
         and_(Book.status == "waiting", Book.next_attempt_at <= now),
         Book.status == "running",  # "running" con lease scaduto: worker morto
     )
-    return and_(Book.phase.in_(ACTIVE_PHASES), lease_free, due)
+    return and_(Book.phase.in_(phases), lease_free, due)
 
 
 class Worker:
@@ -47,6 +48,9 @@ class Worker:
         self._wake = asyncio.Event()
         self._task: asyncio.Task | None = None
         self._lock_file = None  # aperto e bloccato finché questo processo è leader
+        # Attese tra esecuzioni della stessa fase: solo in memoria (un riavvio le azzera)
+        self._last_end: dict[int, float] = {}  # fase -> fine dell'ultima esecuzione (monotonic)
+        self._next_free_in: float | None = None  # secondi alla fine della prossima attesa
 
     # --- leader ----------------------------------------------------------------
 
@@ -112,6 +116,9 @@ class Worker:
             except Exception:
                 log.exception("Errore nel ciclo del worker")
             interval = await asyncio.to_thread(self._interval)
+            if self._next_free_in is not None:
+                # Una fase in attesa si libera prima del prossimo controllo: svegliati allora
+                interval = max(0.5, min(interval, self._next_free_in))
             try:
                 await asyncio.wait_for(self._wake.wait(), timeout=interval)
             except TimeoutError:
@@ -135,20 +142,25 @@ class Worker:
             except Exception as exc:
                 log.exception("Errore nella fase %s del libro %s", snapshot.phase, snapshot.id)
                 result = PhaseResult(False, error=f"Errore interno: {exc!r}")
+            # L'attesa della fase parte dalla fine dell'esecuzione, riuscita o fallita
+            self._last_end[snapshot.phase] = time.monotonic()
             await asyncio.to_thread(self._finish, snapshot, result, started)
 
     def _claim_next(self) -> BookSnapshot | None:
         with SessionLocal() as db:
             settings = {d.key: get_setting(db, d.key) for d in DEFINITIONS}
             lease = settings["claude_timeout_seconds"] + LEASE_MARGIN_SECONDS
+            phases = self._phases_ready(settings)
+            if not phases:
+                return None
             now = utcnow()
             candidates = db.scalars(
-                select(Book.id).where(_eligible(now)).order_by(Book.id).limit(20)
+                select(Book.id).where(_eligible(now, phases)).order_by(Book.id).limit(20)
             ).all()
             for book_id in candidates:
                 claimed = db.execute(
                     update(Book)
-                    .where(Book.id == book_id, _eligible(now))
+                    .where(Book.id == book_id, _eligible(now, phases))
                     .values(
                         status="running",
                         lease_owner=self.id,
@@ -170,6 +182,20 @@ class Worker:
                     settings=settings,
                 )
         return None
+
+    def _phases_ready(self, settings: dict) -> list[int]:
+        """Fasi automatiche che hanno finito la loro attesa minima."""
+        mono = time.monotonic()
+        ready, waits = [], []
+        for phase in ACTIVE_PHASES:
+            last = self._last_end.get(phase)
+            remaining = 0 if last is None else last + settings[min_gap_key(phase)] - mono
+            if remaining > 0:
+                waits.append(remaining)
+            else:
+                ready.append(phase)
+        self._next_free_in = min(waits) if waits else None
+        return ready
 
     def _owned(self, db, book_id: int) -> Book | None:
         book = db.get(Book, book_id)

@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from .models import Setting
+from .phases import ACTIVE_PHASES, PHASES, min_gap_key
 
 DEFAULT_CLAUDE_PROMPT = """\
 Nella cartella corrente ci sono le fotografie di un libro usato che verrà ceduto \
@@ -129,6 +130,23 @@ DEFINITIONS: list[SettingDef] = [
         "separati da virgole). Il nome del libro diventa \"Titolo - Autore\".",
         group="Nome del libro",
     ),
+]
+
+# Attesa minima tra due esecuzioni consecutive della stessa fase (una voce per
+# ogni fase automatica, generata dal registro delle fasi).
+DEFINITIONS += [
+    SettingDef(
+        min_gap_key(n),
+        f"Fase {n} · {PHASES[n].label}: attesa minima (secondi)",
+        "int",
+        PHASES[n].min_gap_default,
+        "Tempo minimo tra la fine di un'esecuzione di questa fase (riuscita o fallita) e "
+        "l'inizio della successiva. Nel frattempo possono girare le altre fasi. 0 = nessuna attesa.",
+        min=0,
+        max=24 * 3600,
+        group="Attese tra esecuzioni",
+    )
+    for n in ACTIVE_PHASES
 ]
 
 BY_KEY = {d.key: d for d in DEFINITIONS}
