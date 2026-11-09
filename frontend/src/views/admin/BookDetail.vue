@@ -215,7 +215,7 @@ onBeforeUnmount(() => clearInterval(timer))
       </div>
       <div class="mb-4 small">
         <span class="text-secondary">Ricavato dal JSON di Claude al termine della fase 1.</span>
-        <button v-if="book.claude_output" class="btn btn-link btn-sm p-0 align-baseline" :disabled="busy" @click="nameFromOutput">
+        <button v-if="book.claude_output" class="btn btn-link btn-sm p-0 align-baseline ms-1" :disabled="busy" @click="nameFromOutput">
           Ricalcola dal JSON
         </button>
       </div>
