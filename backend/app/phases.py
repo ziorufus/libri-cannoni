@@ -9,6 +9,7 @@ Per aggiungere una fase basta scrivere un handler e registrarlo in PHASES.
 """
 
 import asyncio
+import json
 import logging
 import os
 import shlex
@@ -16,9 +17,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from .claude_json import book_condition, book_name
+from .claude_json import book_condition, book_isbn, book_name
 from .config import config
 from .storage import book_dir
+from .vinted_search import VintedSearchError, describe, search_prices
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +35,7 @@ class BookSnapshot:
     notes: str
     photo_files: list[str]
     settings: dict[str, Any]
+    claude_output: str | None = None
 
 
 @dataclass
@@ -133,6 +136,35 @@ async def run_claude(book: BookSnapshot) -> PhaseResult:
     return PhaseResult(True, output=out, updates=updates, fill_if_empty=fill)
 
 
+# --- Fase 2: prezzi degli stessi libri su Vinted -------------------------------
+
+async def search_vinted(book: BookSnapshot) -> PhaseResult:
+    isbn = book_isbn(book.claude_output, book.settings["json_isbn_key"])
+    if not isbn:
+        # Niente ISBN: la fase si considera fatta, senza chiamare Vinted
+        return PhaseResult(
+            True,
+            output="ISBN non presente nel JSON di Claude: ricerca su Vinted saltata",
+            updates={"vinted_prices": None},
+        )
+    try:
+        result = await asyncio.to_thread(
+            search_prices,
+            isbn,
+            book.settings["vinted_search_categories"],
+            book.settings["vinted_search_conditions"],
+            book.settings["vinted_search_limit"],
+        )
+    except VintedSearchError as exc:
+        return PhaseResult(False, error=str(exc))
+    # Anche senza risultati la fase è fatta: si salva la ricerca con elenco vuoto
+    return PhaseResult(
+        True,
+        output=describe(result),
+        updates={"vinted_prices": json.dumps(result, ensure_ascii=False)},
+    )
+
+
 # --- Registro delle fasi -----------------------------------------------------
 
 PHASES: dict[int, Phase] = {
@@ -140,7 +172,14 @@ PHASES: dict[int, Phase] = {
     for p in [
         Phase(0, "Inserito", "Libro inserito: controllo delle fotografie.", check_photos),
         Phase(1, "Analisi Claude", "Invio di foto, prompt e note a `claude -p`.", run_claude, min_gap_default=30),
-        Phase(2, "Descritto", "Descrizione ottenuta. In attesa delle fasi successive."),
+        Phase(
+            2,
+            "Prezzi Vinted",
+            "Ricerca su Vinted, per ISBN, degli annunci dello stesso libro e dei loro prezzi.",
+            search_vinted,
+            min_gap_default=30,
+        ),
+        Phase(3, "Prezzi trovati", "Prezzi di Vinted raccolti. In attesa delle fasi successive."),
     ]
 }
 

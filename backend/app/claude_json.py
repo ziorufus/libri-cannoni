@@ -1,4 +1,4 @@
-"""Lettura del JSON prodotto da Claude e calcolo del nome del libro."""
+"""Lettura del JSON prodotto da Claude (nome, condizioni, ISBN del libro)."""
 
 import json
 import re
@@ -59,3 +59,25 @@ def book_name(output: str | None, title_key: str, author_key: str) -> str | None
         return None
     author = _lookup(data, author_key) if author_key else ""
     return f"{title} - {author}" if author else title
+
+
+_ISBN_CHUNK = re.compile(r"[0-9Xx][0-9Xx \t-]{8,}[0-9Xx]")
+
+
+def book_isbn(output: str | None, key: str) -> str | None:
+    """ISBN dal JSON, ridotto a sole cifre (più l'eventuale X finale degli ISBN-10).
+
+    Se il valore contiene più codici (es. "978-..., 88-..." o un elenco) prende il
+    primo lungo 10 o 13 caratteri; None se non c'è un ISBN plausibile.
+    """
+    data = parse_output(output)
+    if data is None or not key:
+        return None
+    for chunk in _ISBN_CHUNK.findall(_lookup(data, key)):
+        # il pezzo intero ("978 88 04 ...") oppure, se sono più codici separati
+        # da spazi, ciascuno di essi
+        for candidate in (chunk, *chunk.split()):
+            digits = re.sub(r"[ \t-]", "", candidate).upper()
+            if len(digits) in (10, 13) and "X" not in digits[:-1]:
+                return digits
+    return None

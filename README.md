@@ -28,6 +28,24 @@ redirect sono `$BACKEND_URL/api/auth/callback/google` e
 `$BACKEND_URL/api/auth/callback/microsoft`. Un provider senza ID e secret non
 compare nella pagina di login.
 
+**Vinted.** La fase 2 usa il pacchetto
+[vinted-lister](https://github.com/ziorufus/vinted-lister), installato nel
+virtualenv del backend dal suo clone, che deve restare al suo posto
+(`config/` e `data/` vengono letti da lì):
+
+```bash
+.venv/bin/pip install -e /percorso/vinted-lister
+export VINTED_ENV_FILE=/percorso/vinted.env   # es. nel ~/.bashrc
+.venv/bin/vinted auth import --file req.txt   # "Copy as cURL" di una richiesta vinted.it
+.venv/bin/vinted whoami
+```
+
+Lo stesso percorso va in `VINTED_ENV_FILE` del `backend/.env`. Il file deve
+contenere `VINTED_DOMAIN=it`; l'utente di uvicorn deve poter scrivere nel file e
+nella sua cartella (i token vengono rinnovati in automatico). Se la sessione
+scade, rifare `vinted auth import` e premere "Riprova" sui libri falliti: non
+serve riavviare il backend.
+
 **Foto.** Il libro 57 ha le sue foto originali in `$BOOKS_DIR/57/01.jpg, 02.jpg, …`
 (in ordine di scatto). Le miniature stanno in `$BOOKS_DIR/.thumbs/57/`.
 
@@ -37,15 +55,16 @@ compare nella pagina di login.
 |---|---|---|
 | 0 | Inserito | controlla che le foto ci siano |
 | 1 | Analisi Claude | `claude -p` lanciato dentro `$BOOKS_DIR/<id>`, con il prompt (e note) su stdin; l'output va in `books.claude_output` |
-| 2 | Descritto | nessuna azione (in attesa delle fasi successive) |
+| 2 | Prezzi Vinted | cerca su Vinted l'ISBN del JSON di Claude (categoria libri, condizioni ottime/buone, max 10 annunci) e salva prezzi e annunci in `books.vinted_prices`; senza ISBN o senza risultati la fase si considera fatta |
+| 3 | Prezzi trovati | nessuna azione (in attesa delle fasi successive) |
 
 In caso di errore: attesa e nuovo tentativo; dopo N tentativi il libro va in
 "fallito" (riprovabile dall'interfaccia). Tutti i parametri e il prompt sono
 nella sezione **Impostazioni**. Ogni tentativo è registrato in `phase_runs`.
 
-Il processo gira dentro ogni worker uvicorn; ogni libro viene "preso" con un lock
-nel DB (lease con scadenza), quindi più worker non lavorano mai sullo stesso libro
-e un worker morto viene sostituito alla scadenza del lease.
+Il processo gira dentro ogni worker uvicorn, ma lavora solo il "leader" (lock su
+`data/.worker.lock`); in più ogni libro viene "preso" con un lease nel DB, quindi
+più worker non lavorano mai sullo stesso libro.
 
 Per aggiungere una fase: scrivere un handler in [backend/app/phases.py](backend/app/phases.py)
 e registrarlo in `PHASES`.

@@ -1,5 +1,6 @@
 """Gestione libri (solo amministratori) e distribuzione delle foto."""
 
+import json
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
@@ -8,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from ..claude_json import book_condition, book_name
+from ..claude_json import book_condition, book_isbn, book_name
 from ..db import get_db
 from ..models import BOOK_CONDITIONS, Book, Photo
 from ..phases import PHASES, initial_status
@@ -68,11 +69,20 @@ def _book_summary(b: Book) -> dict:
     }
 
 
-def _book_detail(b: Book) -> dict:
+def _vinted_prices(b: Book) -> dict | None:
+    try:
+        return json.loads(b.vinted_prices) if b.vinted_prices else None
+    except ValueError:
+        return None
+
+
+def _book_detail(b: Book, db: Session) -> dict:
     return {
         **_book_summary(b),
         "folder": str(book_dir(b.id)),
         "claude_output": b.claude_output,
+        "isbn": book_isbn(b.claude_output, get_setting(db, "json_isbn_key")),
+        "vinted_prices": _vinted_prices(b),
         "photos": [_photo_out(p) for p in b.photos],
         "runs": [
             {
@@ -180,12 +190,12 @@ async def create_book(
     db.commit()
 
     request.app.state.worker.wake()
-    return _book_detail(_load(db, book.id))
+    return _book_detail(_load(db, book.id), db)
 
 
 @router.get("/books/{book_id}")
 def get_book(book_id: int, db: Session = Depends(get_db), _: CurrentUser = Depends(require_admin)):
-    return _book_detail(_load(db, book_id))
+    return _book_detail(_load(db, book_id), db)
 
 
 def _check_condition(value: str | None) -> str | None:
@@ -237,7 +247,7 @@ def update_book(
     elif body.claude_output is not None:
         _fill_condition_from_output(db, book)
     db.commit()
-    return _book_detail(_load(db, book_id))
+    return _book_detail(_load(db, book_id), db)
 
 
 @router.post("/books/{book_id}/name-from-output")
@@ -249,7 +259,7 @@ def name_from_output(book_id: int, db: Session = Depends(get_db), _: CurrentUser
         raise HTTPException(400, "L'output di Claude non è un JSON valido o non contiene il titolo")
     book.description = name
     db.commit()
-    return _book_detail(_load(db, book_id))
+    return _book_detail(_load(db, book_id), db)
 
 
 @router.post("/books/{book_id}/condition-from-output")
@@ -266,7 +276,7 @@ def condition_from_output(book_id: int, db: Session = Depends(get_db), _: Curren
         )
     book.condition = condition
     db.commit()
-    return _book_detail(_load(db, book_id))
+    return _book_detail(_load(db, book_id), db)
 
 
 @router.delete("/books/{book_id}", status_code=204)
@@ -293,7 +303,7 @@ def retry_book(
     book.next_attempt_at = None
     db.commit()
     request.app.state.worker.wake()
-    return _book_detail(_load(db, book_id))
+    return _book_detail(_load(db, book_id), db)
 
 
 class PhaseReset(BaseModel):
@@ -322,7 +332,7 @@ def set_phase(
     book.lease_until = None
     db.commit()
     request.app.state.worker.wake()
-    return _book_detail(_load(db, book_id))
+    return _book_detail(_load(db, book_id), db)
 
 
 # --- foto (URL firmati, senza header Authorization) ---------------------------

@@ -141,6 +141,43 @@ DEFINITIONS: list[SettingDef] = [
         "\"ottime\", \"buone\" o \"discrete\" (maiuscole/minuscole non contano).",
         group="Dati dal JSON di Claude",
     ),
+    SettingDef(
+        "json_isbn_key",
+        "Etichetta JSON dell'ISBN",
+        "str",
+        "isbn",
+        "Chiave del JSON di Claude con l'ISBN, usato per cercare il libro su Vinted. Trattini e "
+        "spazi vengono tolti; se manca o non è un ISBN valido la ricerca viene saltata.",
+        group="Dati dal JSON di Claude",
+    ),
+    SettingDef(
+        "vinted_search_categories",
+        "Categorie della ricerca",
+        "str",
+        "libri",
+        "Categorie Vinted in cui cercare, separate da virgole (nomi o id numerici, "
+        "come per `vinted search --category`).",
+        group="Fase 2 · Prezzi Vinted",
+    ),
+    SettingDef(
+        "vinted_search_conditions",
+        "Condizioni degli annunci",
+        "str",
+        "ottime, buone",
+        "Condizioni degli annunci da considerare, separate da virgole (come per "
+        "`vinted search --condition`). Vuoto = tutte.",
+        group="Fase 2 · Prezzi Vinted",
+    ),
+    SettingDef(
+        "vinted_search_limit",
+        "Numero massimo di annunci",
+        "int",
+        10,
+        "Quanti annunci salvare al massimo per ogni libro.",
+        min=1,
+        max=96,
+        group="Fase 2 · Prezzi Vinted",
+    ),
 ]
 
 # Attesa minima tra due esecuzioni consecutive della stessa fase (una voce per

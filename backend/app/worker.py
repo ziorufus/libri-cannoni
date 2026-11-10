@@ -180,6 +180,7 @@ class Worker:
                     notes=book.notes,
                     photo_files=[p.filename for p in book.photos],
                     settings=settings,
+                    claude_output=book.claude_output,
                 )
         return None
 

@@ -63,6 +63,8 @@ class Book(Base):
 
     # Risultati delle fasi
     claude_output: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Ricerca su Vinted per ISBN (JSON: query, riepilogo prezzi, annunci trovati)
+    vinted_prices: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     photos: Mapped[list["Photo"]] = relationship(
         back_populates="book",

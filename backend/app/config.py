@@ -25,6 +25,11 @@ class Config(BaseSettings):
     claude_code_oauth_token: str = ""
     claude_bin: str = "claude"
 
+    # Vinted (pacchetto vinted-lister): file con i token di sessione, scritto da
+    # `vinted auth import` e aggiornato a ogni refresh. Vuoto = $VINTED_ENV_FILE
+    # dell'ambiente, altrimenti il .env nella cartella del clone di vinted-lister.
+    vinted_env_file: str = ""
+
     # Login con servizi terzi
     google_client_id: str = ""
     google_client_secret: str = ""

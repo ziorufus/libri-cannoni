@@ -22,6 +22,21 @@ const notesDirty = computed(() => book.value && notesDraft.value !== book.value.
 const editingOutput = ref(false)
 const outputDraft = ref('')
 
+const vinted = computed(() => book.value?.vinted_prices || null)
+// Libro fermo in una fase automatica (es. arrivato lì prima che la fase esistesse)
+const idleAutomatic = computed(
+  () => book.value?.status === 'idle' && meta.phases.find((p) => p.number === book.value.phase)?.automatic,
+)
+
+function fmtPrice(amount, currency) {
+  if (amount === null || amount === undefined) return '—'
+  try {
+    return new Intl.NumberFormat('it-IT', { style: 'currency', currency: currency || 'EUR' }).format(amount)
+  } catch {
+    return `${amount} ${currency || ''}`.trim()
+  }
+}
+
 const lightbox = ref(null) // indice della foto aperta
 const confirmDelete = ref(false)
 const targetPhase = ref(0)
@@ -183,6 +198,9 @@ onBeforeUnmount(() => clearInterval(timer))
             >
               <i class="bi bi-arrow-clockwise me-1"></i>Riprova ora
             </button>
+            <button v-if="idleAutomatic" class="btn btn-sm btn-outline-primary" :disabled="busy" @click="retry">
+              <i class="bi bi-play me-1"></i>Esegui la fase
+            </button>
             <div class="input-group input-group-sm w-auto">
               <select v-model="targetPhase" class="form-select" aria-label="Fase">
                 <option v-for="p in meta.phases" :key="p.number" :value="p.number">
@@ -247,6 +265,55 @@ onBeforeUnmount(() => clearInterval(timer))
         >
           Ricalcola dal JSON
         </button>
+      </div>
+
+      <!-- Prezzi su Vinted -->
+      <h2 class="h6 text-uppercase text-secondary">Prezzi su Vinted</h2>
+      <div class="mb-4">
+        <template v-if="vinted">
+          <div class="small text-secondary mb-2">
+            Ricerca per ISBN <span class="user-select-all">{{ vinted.query }}</span>
+            <template v-if="vinted.conditions?.length"> · condizioni {{ vinted.conditions.join(', ') }}</template>
+            · {{ fmtRelative(vinted.searched_at) }}
+          </div>
+          <div v-if="vinted.summary" class="d-flex flex-wrap gap-2 mb-2">
+            <span class="badge text-bg-light border fw-normal fs-6">
+              min <strong>{{ fmtPrice(vinted.summary.min, vinted.items[0]?.currency) }}</strong>
+            </span>
+            <span class="badge text-bg-primary fw-normal fs-6">
+              mediana <strong>{{ fmtPrice(vinted.summary.median, vinted.items[0]?.currency) }}</strong>
+            </span>
+            <span class="badge text-bg-light border fw-normal fs-6">
+              max <strong>{{ fmtPrice(vinted.summary.max, vinted.items[0]?.currency) }}</strong>
+            </span>
+          </div>
+          <div v-if="vinted.items.length" class="list-group shadow-sm">
+            <a
+              v-for="it in vinted.items"
+              :key="it.id"
+              :href="it.url"
+              target="_blank"
+              rel="noopener"
+              class="list-group-item list-group-item-action d-flex gap-3 align-items-baseline small"
+            >
+              <strong class="text-nowrap" style="min-width: 4.5rem">{{ fmtPrice(it.price, it.currency) }}</strong>
+              <span class="flex-grow-1 text-break">{{ it.title }}</span>
+              <span class="text-secondary text-nowrap">{{ it.condition }}</span>
+            </a>
+          </div>
+          <p v-else class="small text-secondary mb-0">Nessun annuncio trovato.</p>
+        </template>
+        <p v-else-if="book.phase > 2 && !book.isbn" class="small text-secondary mb-0">
+          Ricerca saltata: il JSON di Claude non contiene un ISBN.
+        </p>
+        <p v-else-if="idleAutomatic && book.phase === 2" class="small text-secondary mb-0">
+          Ricerca non ancora eseguita<template v-if="book.isbn"> (ISBN {{ book.isbn }})</template>: premi
+          «Esegui la fase» per avviarla.
+        </p>
+        <p v-else class="small text-secondary mb-0">
+          <template v-if="book.isbn">La ricerca per ISBN {{ book.isbn }} verrà fatta nella fase 2.</template>
+          <template v-else>La ricerca verrà fatta nella fase 2, se il JSON di Claude contiene l'ISBN.</template>
+        </p>
       </div>
 
       <!-- Foto -->
