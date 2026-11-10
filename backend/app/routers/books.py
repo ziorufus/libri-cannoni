@@ -5,7 +5,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -53,6 +53,7 @@ def _book_summary(b: Book) -> dict:
         "id": b.id,
         "description": b.description,
         "condition": b.condition,
+        "price": b.price,
         "notes": b.notes,
         "created_by": b.created_by,
         "created_at": b.created_at,
@@ -214,6 +215,8 @@ class BookUpdate(BaseModel):
     condition: str | None = None
     notes: str | None = None
     claude_output: str | None = None
+    # In euro. Conta solo se presente nella richiesta: null svuota il campo
+    price: float | None = Field(default=None, ge=0, le=100000)
 
 
 def _name_from_output(db: Session, output: str | None) -> str | None:
@@ -242,6 +245,8 @@ def update_book(
             book.description = name
     if body.description is not None:
         book.description = body.description.strip() or None
+    if "price" in body.model_fields_set:
+        book.price = None if body.price is None else round(body.price, 2)
     if body.condition is not None:
         book.condition = _check_condition(body.condition)
     elif body.claude_output is not None:

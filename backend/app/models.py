@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base, UTCDateTime, utcnow
@@ -45,6 +45,8 @@ class Book(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     # Condizioni: uno di BOOK_CONDITIONS, oppure NULL ("usa valore di Claude")
     condition: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Prezzo in euro (due decimali), impostato a mano; NULL = non deciso
+    price: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_by: Mapped[str] = mapped_column(String(320), default="")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)

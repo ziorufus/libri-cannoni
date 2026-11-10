@@ -19,6 +19,16 @@ const nameDraft = ref('')
 const nameDirty = computed(() => book.value && nameDraft.value !== (book.value.description || ''))
 const notesDraft = ref('')
 const notesDirty = computed(() => book.value && notesDraft.value !== book.value.notes)
+// Prezzo: testo libero ("6,50" o "6.5"); vuoto = nessun prezzo
+const priceText = (v) => (v === null || v === undefined ? '' : v.toFixed(2).replace('.', ','))
+const parsePrice = (s) => {
+  const t = s.trim().replace(/\s*€$/, '').replace(',', '.')
+  if (!t) return null
+  return /^\d+(\.\d{1,2})?$/.test(t) ? Number(t) : NaN
+}
+const priceDraft = ref('')
+const priceDirty = computed(() => book.value && !Object.is(parsePrice(priceDraft.value), book.value.price ?? null))
+const priceInvalid = computed(() => Number.isNaN(parsePrice(priceDraft.value)))
 const editingOutput = ref(false)
 const outputDraft = ref('')
 
@@ -52,9 +62,11 @@ async function load() {
     // calcolato dal processo in background).
     const keepName = !first && nameDirty.value
     const keepNotes = !first && notesDirty.value
+    const keepPrice = !first && priceDirty.value
     book.value = b
     if (!keepName) nameDraft.value = b.description || ''
     if (!keepNotes) notesDraft.value = b.notes
+    if (!keepPrice) priceDraft.value = priceText(b.price)
     if (first || b.phase !== prevPhase) targetPhase.value = b.phase
     prevPhase = b.phase
     error.value = ''
@@ -85,6 +97,16 @@ const nameFromOutput = () =>
   act(async () => {
     book.value = await api(`/api/admin/books/${props.id}/name-from-output`, { method: 'POST' })
     nameDraft.value = book.value.description || ''
+  })
+
+const savePrice = () =>
+  act(async () => {
+    if (priceInvalid.value) throw new Error('Prezzo non valido: scrivi un importo come 6,50 (o lascia vuoto)')
+    book.value = await api(`/api/admin/books/${props.id}`, {
+      method: 'PATCH',
+      body: { price: parsePrice(priceDraft.value) },
+    })
+    priceDraft.value = priceText(book.value.price)
   })
 
 const saveCondition = (value) =>
@@ -314,6 +336,33 @@ onBeforeUnmount(() => clearInterval(timer))
           <template v-if="book.isbn">La ricerca per ISBN {{ book.isbn }} verrà fatta nella fase 2.</template>
           <template v-else>La ricerca verrà fatta nella fase 2, se il JSON di Claude contiene l'ISBN.</template>
         </p>
+      </div>
+
+      <!-- Prezzo -->
+      <h2 class="h6 text-uppercase text-secondary">Prezzo</h2>
+      <div class="input-group mb-1" style="max-width: 20rem">
+        <input
+          v-model="priceDraft"
+          class="form-control"
+          :class="{ 'is-invalid': priceInvalid }"
+          inputmode="decimal"
+          placeholder="Non impostato"
+          aria-label="Prezzo in euro"
+          @keyup.enter="priceDirty && savePrice()"
+        />
+        <span class="input-group-text">€</span>
+        <button class="btn btn-primary" :disabled="!priceDirty || priceInvalid || busy" @click="savePrice">Salva</button>
+      </div>
+      <div class="small mb-4">
+        <span class="text-secondary">Lascia vuoto e salva per toglierlo.</span>
+        <button
+          v-if="vinted?.summary"
+          class="btn btn-link btn-sm p-0 ms-1 align-baseline"
+          :disabled="busy"
+          @click="priceDraft = priceText(vinted.summary.median)"
+        >
+          Usa la mediana di Vinted ({{ fmtPrice(vinted.summary.median, vinted.items[0]?.currency) }})
+        </button>
       </div>
 
       <!-- Foto -->
