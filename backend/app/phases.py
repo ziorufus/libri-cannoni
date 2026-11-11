@@ -206,9 +206,29 @@ def _price_fill(value: float | None, settings: dict[str, Any]) -> dict[str, Any]
 
 # --- Fase 3: bozza su Vinted -------------------------------------------------
 
+def suggested_price(book, settings: dict[str, Any]) -> int | None:
+    """Prezzo secondo le regole della fase 2 (mediana di Vinted con ISBN, prezzo di
+    Claude senza), arrotondato e con il minimo; None se non è calcolabile."""
+    if book_isbn(book.claude_output, settings["json_isbn_key"]):
+        try:
+            prices = json.loads(book.vinted_prices) if book.vinted_prices else {}
+        except ValueError:
+            prices = {}
+        value = ((prices or {}).get("summary") or {}).get("median")
+    else:
+        value = claude_number(book.claude_output, settings["json_price_key"])
+    return auto_price(value, settings["price_min_euro"])
+
+
 def require_price(book, settings: dict[str, Any]) -> str | None:
     if book.price is not None:
         return None
+    if (suggested := suggested_price(book, settings)) is not None:
+        # Es. libri passati dalla fase 2 prima che esistesse il calcolo automatico
+        return (
+            f"Manca il prezzo: quello calcolato ({suggested} €) non è stato applicato. "
+            "Usa \"Usa il prezzo calcolato\" nella sezione Prezzo, o inseriscilo a mano."
+        )
     if book_isbn(book.claude_output, settings["json_isbn_key"]):
         return "Manca il prezzo: ISBN presente ma nessun prezzo trovato su Vinted. Inserisci il prezzo a mano."
     return "Manca il prezzo: nessun ISBN e nessun prezzo da Claude. Inserisci il prezzo a mano."

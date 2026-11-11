@@ -10,11 +10,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..claude_json import book_condition, book_isbn, book_name
-from ..db import get_db
-from ..models import BOOK_CONDITIONS, Book, Photo
-from ..phases import PHASES, initial_status, pause_key, unmet_requirements
+from ..db import get_db, utcnow
+from ..models import BOOK_CONDITIONS, Book, PhaseRun, Photo
+from ..phases import PHASES, initial_status, pause_key, suggested_price, unmet_requirements
 from ..security import CurrentUser, require_admin
 from ..settings_store import get_setting
+from ..vinted_draft import delete_draft
+from ..vinted_search import VintedOpError
 from ..worker import apply_pauses, load_settings
 from ..storage import (
     InvalidPhoto,
@@ -81,7 +83,8 @@ def _json_column(value: str | None) -> dict | None:
 
 def _blocks(b: Book, settings: dict) -> tuple[list[dict], bool]:
     """Motivi per cui il libro non può eseguire la fase attuale (calcolati ora),
-    e se si può forzare la pausa."""
+    e se si può forzare la pausa: solo se la pausa è l'unico blocco, perché i
+    requisiti (es. il prezzo) non si possono superare."""
     phase = PHASES.get(b.phase)
     if phase is None or phase.handler is None or b.status in ("running", "failed"):
         return [], False
@@ -90,7 +93,7 @@ def _blocks(b: Book, settings: dict) -> tuple[list[dict], bool]:
     forced = b.force_phase == b.phase
     if paused and not forced:
         blocks.append({"kind": "pause", "message": f"La fase {b.phase} ({phase.label}) è in pausa per tutti i libri."})
-    return blocks, paused and not forced
+    return blocks, paused and not forced and not any(b["kind"] == "requirement" for b in blocks)
 
 
 def _book_detail(b: Book, db: Session) -> dict:
@@ -100,6 +103,7 @@ def _book_detail(b: Book, db: Session) -> dict:
         **_book_summary(b),
         "blocks": blocks,
         "can_force": can_force,
+        "suggested_price": suggested_price(b, settings),
         "forced": b.force_phase is not None and b.force_phase == b.phase,
         "folder": str(book_dir(b.id)),
         "claude_output": b.claude_output,
@@ -369,12 +373,59 @@ def force_phase(
     book = _load(db, book_id)
     if not get_setting(db, pause_key(book.phase)):
         raise HTTPException(400, "Questa fase non è in pausa")
+    if reasons := unmet_requirements(book, load_settings(db)):
+        raise HTTPException(400, "Non si può forzare: " + " ".join(reasons))
     book.force_phase = book.phase
     if book.status in ("paused", "idle"):
         book.status = "ready"
     db.commit()
     apply_pauses(db)
     request.app.state.worker.wake()
+    return _book_detail(_load(db, book_id), db)
+
+
+DRAFT_PHASE = 3  # fase che crea la bozza su Vinted
+
+
+@router.post("/books/{book_id}/delete-draft")
+def delete_vinted_draft(book_id: int, db: Session = Depends(get_db), cu: CurrentUser = Depends(require_admin)):
+    """Elimina la bozza da Vinted e dal libro, e riporta il libro alla fase della
+    bozza, fermo: si rilancia a mano ("Esegui la fase" o "Esegui comunque")."""
+    book = _load(db, book_id)
+    draft = _json_column(book.vinted_draft)
+    if not draft:
+        raise HTTPException(400, "Il libro non ha una bozza su Vinted")
+    if book.status == "running":
+        raise HTTPException(409, "Il libro è in lavorazione")
+    started = utcnow()
+    try:
+        # Prima Vinted: se fallisce il libro resta com'era
+        message = delete_draft(draft["draft_id"])
+    except VintedOpError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    db.add(
+        PhaseRun(
+            book_id=book.id,
+            phase=DRAFT_PHASE,
+            attempt=0,
+            worker=f"eliminazione manuale ({cu.email})",
+            started_at=started,
+            finished_at=utcnow(),
+            success=True,
+            output=message,
+        )
+    )
+    book.vinted_draft = None
+    book.phase = DRAFT_PHASE
+    book.status = "idle"
+    book.attempts = 0
+    book.next_attempt_at = None
+    book.last_error = ""
+    book.force_phase = None
+    book.lease_owner = None
+    book.lease_until = None
+    db.commit()
+    db.expire_all()  # ricarica anche lo storico con la nuova riga
     return _book_detail(_load(db, book_id), db)
 
 

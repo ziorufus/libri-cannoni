@@ -49,6 +49,7 @@ function fmtPrice(amount, currency) {
 
 const lightbox = ref(null) // indice della foto aperta
 const confirmDelete = ref(false)
+const confirmDeleteDraft = ref(false)
 const targetPhase = ref(0)
 let timer = null
 let prevPhase = null
@@ -112,6 +113,15 @@ const savePrice = () =>
 const saveCondition = (value) =>
   act(async () => {
     book.value = await api(`/api/admin/books/${props.id}`, { method: 'PATCH', body: { condition: value } })
+  })
+
+const deleteDraft = () =>
+  act(async () => {
+    try {
+      book.value = await api(`/api/admin/books/${props.id}/delete-draft`, { method: 'POST' })
+    } finally {
+      confirmDeleteDraft.value = false
+    }
   })
 
 const forcePhase = () =>
@@ -237,7 +247,7 @@ onBeforeUnmount(() => clearInterval(timer))
               <i class="bi bi-arrow-clockwise me-1"></i>Riprova ora
             </button>
             <button
-              v-if="idleAutomatic && !book.can_force"
+              v-if="idleAutomatic && !book.blocks?.length"
               class="btn btn-sm btn-outline-primary"
               :disabled="busy"
               @click="retry"
@@ -388,12 +398,12 @@ onBeforeUnmount(() => clearInterval(timer))
           Senza prezzo la bozza su Vinted non viene creata.
         </span>
         <button
-          v-if="vinted?.summary"
+          v-if="book.suggested_price !== null && book.suggested_price !== book.price"
           class="btn btn-link btn-sm p-0 ms-1 align-baseline"
           :disabled="busy"
-          @click="priceDraft = priceText(vinted.summary.median)"
+          @click="priceDraft = priceText(book.suggested_price)"
         >
-          Usa la mediana di Vinted ({{ fmtPrice(vinted.summary.median, vinted.items[0]?.currency) }})
+          Usa il prezzo calcolato ({{ fmtPrice(book.suggested_price, 'EUR') }})
         </button>
       </div>
 
@@ -411,6 +421,14 @@ onBeforeUnmount(() => clearInterval(timer))
               {{ book.vinted_draft.condition }} · {{ book.vinted_draft.language }} · ISBN {{ book.vinted_draft.isbn }} ·
               {{ book.vinted_draft.photos }} foto
             </div>
+            <button
+              v-if="book.status !== 'running'"
+              class="btn btn-sm btn-outline-danger mt-2"
+              :disabled="busy"
+              @click="confirmDeleteDraft = true"
+            >
+              <i class="bi bi-trash me-1"></i>Elimina bozza e torna alla fase 3
+            </button>
           </div>
         </div>
         <p v-else class="small text-secondary mb-0">Verrà creata nella fase 3.</p>
@@ -494,6 +512,17 @@ onBeforeUnmount(() => clearInterval(timer))
           </a>
           <button class="btn btn-sm btn-light" @click="step(-1)"><i class="bi bi-chevron-left"></i></button>
           <button class="btn btn-sm btn-light" @click="step(1)"><i class="bi bi-chevron-right"></i></button>
+        </template>
+      </BaseModal>
+
+      <BaseModal v-if="confirmDeleteDraft" title="Eliminare la bozza su Vinted?" @close="confirmDeleteDraft = false">
+        La bozza {{ book.vinted_draft?.draft_id }} verrà eliminata definitivamente da Vinted e dal libro. Il libro
+        tornerà alla fase 3 (Bozza Vinted), fermo: potrai ricreare la bozza con «Esegui la fase» o «Esegui comunque».
+        <template #footer>
+          <button class="btn btn-light" @click="confirmDeleteDraft = false">Annulla</button>
+          <button class="btn btn-danger" :disabled="busy" @click="deleteDraft">
+            <span v-if="busy" class="spinner-border spinner-border-sm me-1"></span>Elimina bozza
+          </button>
         </template>
       </BaseModal>
 
