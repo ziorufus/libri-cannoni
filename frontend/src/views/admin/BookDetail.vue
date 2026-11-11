@@ -408,7 +408,7 @@ onBeforeUnmount(() => clearInterval(timer))
       </div>
 
       <!-- Bozza su Vinted -->
-      <h2 class="h6 text-uppercase text-secondary">Bozza su Vinted</h2>
+      <h2 class="h6 text-uppercase text-secondary">Annuncio su Vinted</h2>
       <div class="mb-4">
         <div v-if="book.vinted_draft" class="card border-0 shadow-sm">
           <div class="card-body small">
@@ -416,13 +416,32 @@ onBeforeUnmount(() => clearInterval(timer))
               <i class="bi bi-box-arrow-up-right me-1"></i>Bozza {{ book.vinted_draft.draft_id }}
             </a>
             <span class="text-secondary"> · creata {{ fmtRelative(book.vinted_draft.created_at) }}</span>
+            <div class="mt-1">
+              <template v-if="book.vinted_draft.published_at">
+                <span class="badge text-bg-success me-1"><i class="bi bi-check-circle me-1"></i>Pubblicato</span>
+                <span class="text-secondary">{{ fmtRelative(book.vinted_draft.published_at) }} · </span>
+                <a :href="book.vinted_draft.item_url" target="_blank" rel="noopener">
+                  <i class="bi bi-box-arrow-up-right me-1"></i>vedi l'annuncio
+                </a>
+              </template>
+              <template v-else-if="book.vinted_draft.publish_requested_at">
+                <span class="badge text-bg-info me-1"><i class="bi bi-hourglass-split me-1"></i>In approvazione</span>
+                <span class="text-secondary">pubblicazione richiesta {{ fmtRelative(book.vinted_draft.publish_requested_at) }}</span>
+              </template>
+              <template v-else>
+                <span class="badge text-bg-light border me-1">Bozza</span>
+                <span v-if="book.vinted_draft.returned_to_draft_at" class="text-danger">
+                  riportata in bozza da Vinted {{ fmtRelative(book.vinted_draft.returned_to_draft_at) }}
+                </span>
+              </template>
+            </div>
             <div class="text-secondary mt-1">
               {{ fmtPrice(book.vinted_draft.price, book.vinted_draft.currency) }} · {{ book.vinted_draft.category }} ·
               {{ book.vinted_draft.condition }} · {{ book.vinted_draft.language }} · ISBN {{ book.vinted_draft.isbn }} ·
               {{ book.vinted_draft.photos }} foto
             </div>
             <button
-              v-if="book.status !== 'running'"
+              v-if="book.status !== 'running' && book.phase <= 4"
               class="btn btn-sm btn-outline-danger mt-2"
               :disabled="busy"
               @click="confirmDeleteDraft = true"

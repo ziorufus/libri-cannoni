@@ -138,3 +138,38 @@ def delete_draft(draft_id: int) -> str:
             return f"Bozza {draft_id} non trovata su Vinted (già eliminata)"
         raise wrap_error("Eliminazione della bozza su Vinted non riuscita", exc) from exc
     return f"Bozza {draft_id} eliminata da Vinted"
+
+
+# --- Pubblicazione (fase 4) e approvazione (fase 5) ----------------------------
+
+# Errori di validazione: ritentare la stessa pubblicazione non serve
+_INVALID = re.compile(r"-> (400|422):")
+
+
+def publish_draft(draft_id: int) -> str:
+    """Chiede a Vinted di pubblicare la bozza (come `vinted publish ID`).
+    Restituisce l'indirizzo pubblico che l'annuncio avrà dopo l'approvazione."""
+    client = new_client()
+    try:
+        client.publish_draft(int(draft_id))
+    except Exception as exc:
+        err = wrap_error("Pubblicazione su Vinted non riuscita", exc)
+        err.permanent = bool(_INVALID.search(str(exc)))
+        raise err from exc
+    return client.market.item_url(int(draft_id))
+
+
+def item_state(draft_id: int) -> str:
+    """Stato dell'annuncio dopo la richiesta di pubblicazione (come `vinted item ID`):
+    "review" = ancora in approvazione (durante l'approvazione Vinted risponde 404),
+    "draft" = riportato in bozza, "published" = pubblicato."""
+    client = new_client()
+    try:
+        item = client.get_item_edit(int(draft_id))
+    except Exception as exc:
+        if _NOT_FOUND.search(str(exc)):
+            return "review"
+        raise wrap_error("Controllo dell'annuncio su Vinted non riuscito", exc) from exc
+    if "is_draft" not in item:
+        raise VintedOpError("Risposta di Vinted senza il campo is_draft: stato dell'annuncio sconosciuto")
+    return "draft" if item["is_draft"] else "published"

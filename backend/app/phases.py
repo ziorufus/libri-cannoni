@@ -21,13 +21,14 @@ import math
 import os
 import shlex
 from collections.abc import Awaitable, Callable
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Any
 
 from .claude_json import book_condition, book_isbn, book_name, claude_number, claude_value
 from .config import config
 from .storage import book_dir
-from .vinted_draft import NO_ISBN, DraftData, create_draft, render_description
+from .vinted_draft import NO_ISBN, DraftData, create_draft, item_state, publish_draft, render_description
 from .vinted_search import VintedOpError, describe, search_prices
 
 log = logging.getLogger(__name__)
@@ -63,6 +64,13 @@ class PhaseResult:
     fill_if_empty: dict[str, Any] = field(default_factory=dict)
     # False = errore nei dati: inutile ritentare, il libro va subito in "fallito"
     retry: bool = True
+    # Solo per le fasi che controllano più volte (es. approvazione Vinted):
+    retry_delay_minutes: float | None = None  # attesa tra i tentativi, invece di quella globale
+    max_attempts: int | None = None  # tentativi massimi, invece di quelli globali
+    # Esito positivo: attesa prima di eseguire la fase successiva
+    next_phase_delay_minutes: float | None = None
+    # Esito negativo: riporta il libro a questa fase, fermo (gli `updates` si applicano)
+    goto_phase: int | None = None
 
 
 Handler = Callable[[BookSnapshot], Awaitable[PhaseResult]]
@@ -305,6 +313,74 @@ async def create_vinted_draft(book: BookSnapshot) -> PhaseResult:
     )
 
 
+# --- Fase 4: pubblicazione; fase 5: approvazione di Vinted --------------------
+
+PUBLISH_PHASE = 4
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _draft(book: BookSnapshot) -> dict[str, Any] | None:
+    try:
+        draft = json.loads(book.vinted_draft) if book.vinted_draft else None
+    except ValueError:
+        return None
+    return draft if isinstance(draft, dict) and draft.get("draft_id") else None
+
+
+async def publish_vinted(book: BookSnapshot) -> PhaseResult:
+    draft = _draft(book)
+    if draft is None:
+        return PhaseResult(False, error="Il libro non ha una bozza su Vinted (rifai la fase 3)", retry=False)
+    try:
+        url = await asyncio.to_thread(publish_draft, draft["draft_id"])
+    except VintedOpError as exc:
+        return PhaseResult(False, error=str(exc), retry=not exc.permanent)
+    draft.update(publish_requested_at=_now_iso(), item_url=url, published_at=None)
+    wait = book.settings["publish_check_interval_minutes"]
+    return PhaseResult(
+        True,
+        output=f"Pubblicazione della bozza {draft['draft_id']} richiesta: in attesa dell'approvazione di Vinted",
+        updates={"vinted_draft": json.dumps(draft, ensure_ascii=False)},
+        # Primo controllo dopo l'intervallo: subito dopo la richiesta Vinted
+        # potrebbe ancora mostrare la bozza
+        next_phase_delay_minutes=wait,
+    )
+
+
+async def check_publication(book: BookSnapshot) -> PhaseResult:
+    draft = _draft(book)
+    if draft is None:
+        return PhaseResult(False, error="Il libro non ha una bozza su Vinted", retry=False)
+    polling = {
+        "retry_delay_minutes": book.settings["publish_check_interval_minutes"],
+        "max_attempts": book.settings["publish_check_max_attempts"],
+    }
+    try:
+        state = await asyncio.to_thread(item_state, draft["draft_id"])
+    except VintedOpError as exc:
+        return PhaseResult(False, error=str(exc), **polling)
+    if state == "review":
+        return PhaseResult(False, error="Ancora in approvazione su Vinted (l'annuncio risponde 404)", **polling)
+    if state == "draft":
+        draft.update(publish_requested_at=None, returned_to_draft_at=_now_iso())
+        return PhaseResult(
+            False,
+            error="Vinted non ha approvato l'annuncio e l'ha riportato in bozza. Controllalo sul sito, "
+            "poi rilancia la pubblicazione con \"Esegui la fase\".",
+            updates={"vinted_draft": json.dumps(draft, ensure_ascii=False)},
+            goto_phase=PUBLISH_PHASE,
+        )
+    draft.update(published_at=_now_iso())
+    return PhaseResult(
+        True,
+        output=f"Annuncio pubblicato: {draft.get('item_url')}",
+        updates={"vinted_draft": json.dumps(draft, ensure_ascii=False)},
+    )
+
+
 # --- Registro delle fasi -----------------------------------------------------
 
 PHASES: dict[int, Phase] = {
@@ -328,7 +404,23 @@ PHASES: dict[int, Phase] = {
             requires=(require_price,),
             paused_default=True,
         ),
-        Phase(4, "Bozza creata", "Bozza presente su Vinted. In attesa delle fasi successive."),
+        Phase(
+            PUBLISH_PHASE,
+            "Pubblicazione",
+            "Richiesta a Vinted di pubblicare la bozza (come `vinted publish`).",
+            publish_vinted,
+            min_gap_default=30,
+            paused_default=True,
+        ),
+        Phase(
+            5,
+            "Approvazione Vinted",
+            "Controllo periodico (come `vinted item`) finché Vinted approva l'annuncio "
+            "o lo riporta in bozza (in quel caso il libro torna fermo alla fase 4).",
+            check_publication,
+            min_gap_default=5,
+        ),
+        Phase(6, "Pubblicato", "Annuncio pubblicato su Vinted."),
     ]
 }
 

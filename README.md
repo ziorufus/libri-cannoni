@@ -57,7 +57,9 @@ serve riavviare il backend.
 | 1 | Analisi Claude | `claude -p` lanciato dentro `$BOOKS_DIR/<id>`, con il prompt (e note) su stdin; l'output va in `books.claude_output` |
 | 2 | Prezzi Vinted | cerca su Vinted l'ISBN del JSON di Claude (categoria libri, condizioni ottime/buone, max 10 annunci) e salva prezzi e annunci in `books.vinted_prices`; senza ISBN o senza risultati la fase si considera fatta. Se il prezzo è vuoto lo calcola: mediana di Vinted (con ISBN) o prezzo di Claude (senza ISBN), arrotondato all'euro, mai sotto il minimo |
 | 3 | Bozza Vinted | crea la bozza su Vinted (equivalente di `vinted draft ... --no-move`) e la salva in `books.vinted_draft`. Richiede il prezzo; **in pausa** per impostazione predefinita |
-| 4 | Bozza creata | nessuna azione (in attesa delle fasi successive) |
+| 4 | Pubblicazione | chiede a Vinted di pubblicare la bozza (equivalente di `vinted publish ID`). **In pausa** per impostazione predefinita |
+| 5 | Approvazione Vinted | ogni N minuti (impostazione, default 2) legge l'annuncio come `vinted item ID`: il 404 vuol dire "ancora in approvazione". Se Vinted lo pubblica si passa alla fase 6; se lo riporta in bozza il libro torna **fermo** alla fase 4 (dopo eventuali correzioni sul sito: "Esegui la fase"). Dopo il numero massimo di controlli (default 20) il libro va in "Fallito": "Riprova" ricomincia i controlli senza ripubblicare |
+| 6 | Pubblicato | nessuna azione |
 
 In caso di errore: attesa e nuovo tentativo; dopo N tentativi il libro va in
 "fallito" (riprovabile dall'interfaccia). Gli errori nei dati (es. categoria non

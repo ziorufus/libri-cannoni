@@ -292,6 +292,29 @@ DEFINITIONS: list[SettingDef] = [
         "segnaposto sono vuoti vengono tolte.",
         group="Fase 3 · Bozza Vinted",
     ),
+    SettingDef(
+        "publish_check_interval_minutes",
+        "Intervallo dei controlli (minuti)",
+        "int",
+        2,
+        "Dopo la richiesta di pubblicazione (fase 4), ogni quanti minuti si chiede a Vinted "
+        "se l'annuncio è stato approvato. Il primo controllo avviene dopo questo intervallo.",
+        min=1,
+        max=60,
+        group="Fase 5 · Approvazione Vinted",
+    ),
+    SettingDef(
+        "publish_check_max_attempts",
+        "Numero massimo di controlli",
+        "int",
+        20,
+        "Se dopo questi controlli l'annuncio è ancora in approvazione (o Vinted risponde con "
+        "errori) il libro va in \"Fallito\": \"Riprova\" ricomincia i controlli, senza "
+        "ripubblicare.",
+        min=1,
+        max=1000,
+        group="Fase 5 · Approvazione Vinted",
+    ),
 ]
 
 # Attesa minima tra due esecuzioni consecutive della stessa fase (una voce per

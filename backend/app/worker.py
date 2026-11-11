@@ -307,17 +307,31 @@ class Worker:
                 book.attempts = 0
                 book.next_attempt_at = None
                 book.last_error = ""
+                if result.next_phase_delay_minutes and book.status == "ready":
+                    book.status = "waiting"
+                    book.next_attempt_at = now + timedelta(minutes=result.next_phase_delay_minutes)
                 log.info("Libro %s: fase %s completata", book.id, snap.phase)
+            elif result.goto_phase is not None:
+                # Es. Vinted ha riportato l'annuncio in bozza: si torna indietro, fermi
+                for key, value in result.updates.items():
+                    setattr(book, key, value)
+                book.phase = result.goto_phase
+                book.status = "idle"
+                book.force_phase = None
+                book.attempts = 0
+                book.next_attempt_at = None
+                book.last_error = result.error
+                log.warning("Libro %s: fase %s -> torna alla fase %s: %s", book.id, snap.phase, book.phase, result.error)
             else:
                 book.attempts = snap.attempt
                 book.last_error = result.error
-                max_attempts = snap.settings["phase_max_attempts"]
+                max_attempts = result.max_attempts or snap.settings["phase_max_attempts"]
                 if book.attempts >= max_attempts or not result.retry:
                     book.status = "failed"
                     book.next_attempt_at = None
                     log.warning("Libro %s: fase %s fallita definitivamente: %s", book.id, snap.phase, result.error)
                 else:
-                    delay = snap.settings["phase_retry_delay_minutes"]
+                    delay = result.retry_delay_minutes or snap.settings["phase_retry_delay_minutes"]
                     book.status = "waiting"
                     book.next_attempt_at = now + timedelta(minutes=delay)
                     log.warning(

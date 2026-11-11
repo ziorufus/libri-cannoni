@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, selectinload
 from ..claude_json import book_condition, book_isbn, book_name
 from ..db import get_db, utcnow
 from ..models import BOOK_CONDITIONS, Book, PhaseRun, Photo
-from ..phases import PHASES, initial_status, pause_key, suggested_price, unmet_requirements
+from ..phases import PHASES, PUBLISH_PHASE, initial_status, pause_key, suggested_price, unmet_requirements
 from ..security import CurrentUser, require_admin
 from ..settings_store import get_setting
 from ..vinted_draft import delete_draft
@@ -397,6 +397,8 @@ def delete_vinted_draft(book_id: int, db: Session = Depends(get_db), cu: Current
         raise HTTPException(400, "Il libro non ha una bozza su Vinted")
     if book.status == "running":
         raise HTTPException(409, "Il libro è in lavorazione")
+    if book.phase > PUBLISH_PHASE:
+        raise HTTPException(400, "L'annuncio è in approvazione o già pubblicato su Vinted: non è più una bozza")
     started = utcnow()
     try:
         # Prima Vinted: se fallisce il libro resta com'era
