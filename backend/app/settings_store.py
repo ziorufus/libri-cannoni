@@ -193,6 +193,16 @@ DEFINITIONS: list[SettingDef] = [
         group="Dati dal JSON di Claude",
     ),
     SettingDef(
+        "json_condition_text_key",
+        "Etichetta JSON del testo delle condizioni",
+        "str",
+        "condizioni",
+        "Segnaposto {condizioni} della descrizione dell'annuncio: testo libero sullo stato del "
+        "libro, letto dal JSON di Claude al momento della bozza. Se manca si usano le condizioni "
+        "del libro (ottime, buone, discrete).",
+        group="Dati dal JSON di Claude",
+    ),
+    SettingDef(
         "json_language_key",
         "Etichetta JSON della lingua",
         "str",
@@ -278,7 +288,7 @@ DEFINITIONS: list[SettingDef] = [
         "text",
         DEFAULT_DESCRIPTION_TEMPLATE,
         "Segnaposto: {titolo} {autore} {editore} {anno} {collana} {lingua} {categoria} "
-        "{descrizione} {condizioni} (le condizioni del libro). Le righe in cui tutti i "
+        "{descrizione} {condizioni} (testo delle condizioni, vedi sopra). Le righe in cui tutti i "
         "segnaposto sono vuoti vengono tolte.",
         group="Fase 3 · Bozza Vinted",
     ),

@@ -281,7 +281,8 @@ async def create_vinted_draft(book: BookSnapshot) -> PhaseResult:
         "descrizione": "json_description_key",
     }
     values = {name: _claude(book, key) for name, key in keys.items()}
-    values["condizioni"] = book.condition or _claude(book, "json_condition_key")
+    # testo descrittivo dal JSON; in mancanza, le condizioni del libro (ottime/buone/discrete)
+    values["condizioni"] = _claude(book, "json_condition_text_key") or book.condition or ""
 
     data = DraftData(
         title=title,
