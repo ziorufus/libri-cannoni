@@ -43,8 +43,9 @@ export VINTED_ENV_FILE=/percorso/vinted.env   # es. nel ~/.bashrc
 Lo stesso percorso va in `VINTED_ENV_FILE` del `backend/.env`. Il file deve
 contenere `VINTED_DOMAIN=it`; l'utente di uvicorn deve poter scrivere nel file e
 nella sua cartella (i token vengono rinnovati in automatico). Se la sessione
-scade, rifare `vinted auth import` e premere "Riprova" sui libri falliti: non
-serve riavviare il backend.
+scade, reimportare i token dalla pagina **Admin → Vinted** (incollando il "Copy as
+cURL", equivale a `vinted auth import`) oppure da terminale, poi premere "Riprova"
+sui libri falliti: non serve riavviare il backend.
 
 **Foto.** Il libro 57 ha le sue foto originali in `$BOOKS_DIR/57/01.jpg, 02.jpg, …`
 (in ordine di scatto). Le miniature stanno in `$BOOKS_DIR/.thumbs/57/`.

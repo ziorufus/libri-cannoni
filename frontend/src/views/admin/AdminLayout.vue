@@ -19,6 +19,11 @@ onMounted(() => loadMeta().catch(() => {}))
         </RouterLink>
       </li>
       <li class="nav-item">
+        <RouterLink class="nav-link text-nowrap" :to="{ name: 'vinted' }" active-class="active">
+          <i class="bi bi-key me-1"></i>Vinted
+        </RouterLink>
+      </li>
+      <li class="nav-item">
         <RouterLink class="nav-link text-nowrap" :to="{ name: 'settings' }" active-class="active">
           <i class="bi bi-gear me-1"></i>Impostazioni
         </RouterLink>

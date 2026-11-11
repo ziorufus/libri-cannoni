@@ -28,7 +28,7 @@ _AUTH_ERROR = re.compile(r"-> (401|403):")
 def wrap_error(prefix: str, exc: Exception) -> VintedOpError:
     msg = str(exc) or repr(exc)
     if _AUTH_ERROR.search(msg):
-        msg += " — sessione Vinted scaduta? Rifai `vinted auth import`"
+        msg += " — sessione Vinted scaduta? Reimporta i token da Admin → Vinted"
     return VintedOpError(f"{prefix}: {msg}"[:4000])
 
 
