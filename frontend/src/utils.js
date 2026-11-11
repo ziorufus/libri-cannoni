@@ -28,4 +28,6 @@ export const STATUS_STYLE = {
   waiting: { cls: 'text-bg-warning', icon: 'bi-clock-history' },
   failed: { cls: 'text-bg-danger', icon: 'bi-exclamation-triangle' },
   idle: { cls: 'text-bg-success', icon: 'bi-check2' },
+  blocked: { cls: 'text-bg-dark', icon: 'bi-lock' },
+  paused: { cls: 'text-bg-info', icon: 'bi-pause-circle' },
 }

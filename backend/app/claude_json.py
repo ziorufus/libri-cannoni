@@ -81,3 +81,20 @@ def book_isbn(output: str | None, key: str) -> str | None:
             if len(digits) in (10, 13) and "X" not in digits[:-1]:
                 return digits
     return None
+
+
+def claude_value(output: str | None, key: str) -> str:
+    """Valore di `key` nel JSON di Claude come testo ("" se manca o il JSON non è valido)."""
+    data = parse_output(output)
+    if data is None or not key:
+        return ""
+    return _lookup(data, key)
+
+
+_NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
+
+
+def claude_number(output: str | None, key: str) -> float | None:
+    """Primo numero nel valore di `key` ("12", 12, "12,50 €", "circa 12 euro"), o None."""
+    m = _NUMBER.search(claude_value(output, key))
+    return float(m.group().replace(",", ".")) if m else None

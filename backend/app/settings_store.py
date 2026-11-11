@@ -6,7 +6,18 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from .models import Setting
-from .phases import ACTIVE_PHASES, PHASES, min_gap_key
+from .phases import ACTIVE_PHASES, PHASES, min_gap_key, pause_key
+
+DEFAULT_DESCRIPTION_TEMPLATE = """\
+{descrizione}
+
+Titolo: {titolo}
+Autore: {autore}
+Editore: {editore}
+Collana: {collana}
+Anno: {anno}
+Lingua: {lingua}
+Condizioni: {condizioni}"""
 
 DEFAULT_CLAUDE_PROMPT = """\
 Nella cartella corrente ci sono le fotografie di un libro usato che verrà ceduto \
@@ -25,9 +36,16 @@ Rispondi SOLO con un oggetto JSON, senza altro testo, con queste chiavi:
 - "curatore", "traduttore"
 - "editore", "collana", "anno", "edizione"
 - "isbn": se visibile
-- "lingua", "formato", "legatura", "pagine"
+- "lingua": lingua del testo, una parola in minuscolo (es. "italiano", "inglese")
+- "formato", "legatura", "pagine"
+- "categoria": esattamente una di queste: "narrativa", "saggistica", "ragazzi", \
+"bambini", "neonati e bimbi piccoli", "fumetti", "libri di testo", \
+"libri da colorare, rompicapo e attività", "riviste"
 - "stato": stato di conservazione, con i difetti visibili
 - "condizioni": esattamente una di queste parole: "ottime", "buone", "discrete"
+- "condizioni_vinted": esattamente uno di questi valori: "nuovo con cartellino", \
+"nuovo senza cartellino", "ottime", "buone", "discrete"
+- "prezzo": prezzo di vendita dell'usato in euro, numero intero
 - "descrizione": breve descrizione del contenuto, adatta a un annuncio
 
 Se un'informazione non è ricavabile usa null invece di inventarla. \
@@ -38,7 +56,7 @@ Scrivi i testi in italiano."""
 class SettingDef:
     key: str
     label: str
-    type: str  # "int" | "str" | "text"
+    type: str  # "int" | "str" | "text" | "bool"
     default: Any
     help: str = ""
     min: int | None = None
@@ -151,6 +169,70 @@ DEFINITIONS: list[SettingDef] = [
         group="Dati dal JSON di Claude",
     ),
     SettingDef(
+        "json_price_key",
+        "Etichetta JSON del prezzo",
+        "str",
+        "prezzo",
+        "Prezzo proposto da Claude: usato solo per i libri senza ISBN (vedi Fase 2).",
+        group="Dati dal JSON di Claude",
+    ),
+    SettingDef(
+        "json_category_key",
+        "Etichetta JSON della categoria",
+        "str",
+        "categoria",
+        "Categoria Vinted della bozza: un nome come narrativa, saggistica, fumetti… (o un id numerico). Se non è riconosciuta la fase 3 fallisce.",
+        group="Dati dal JSON di Claude",
+    ),
+    SettingDef(
+        "json_vinted_condition_key",
+        "Etichetta JSON delle condizioni per Vinted",
+        "str",
+        "condizioni_vinted",
+        "Usata per la bozza quando le condizioni non sono state scelte a mano (es. ottime, nuovo senza cartellino). Se non è riconosciuta la fase 3 fallisce.",
+        group="Dati dal JSON di Claude",
+    ),
+    SettingDef(
+        "json_language_key",
+        "Etichetta JSON della lingua",
+        "str",
+        "lingua",
+        "Lingua del libro per Vinted (es. italiano, inglese). Se manca o non è riconosciuta la fase 3 fallisce.",
+        group="Dati dal JSON di Claude",
+    ),
+    SettingDef(
+        "json_publisher_key",
+        "Etichetta JSON dell'editore",
+        "str",
+        "editore",
+        "Segnaposto {editore}.",
+        group="Dati dal JSON di Claude",
+    ),
+    SettingDef(
+        "json_year_key",
+        "Etichetta JSON dell'anno",
+        "str",
+        "anno",
+        "Segnaposto {anno}.",
+        group="Dati dal JSON di Claude",
+    ),
+    SettingDef(
+        "json_series_key",
+        "Etichetta JSON della collana",
+        "str",
+        "collana",
+        "Segnaposto {collana}.",
+        group="Dati dal JSON di Claude",
+    ),
+    SettingDef(
+        "json_description_key",
+        "Etichetta JSON della descrizione",
+        "str",
+        "descrizione",
+        "Segnaposto {descrizione}.",
+        group="Dati dal JSON di Claude",
+    ),
+    SettingDef(
         "vinted_search_categories",
         "Categorie della ricerca",
         "str",
@@ -178,6 +260,28 @@ DEFINITIONS: list[SettingDef] = [
         max=96,
         group="Fase 2 · Prezzi Vinted",
     ),
+    SettingDef(
+        "price_min_euro",
+        "Prezzo minimo (euro)",
+        "int",
+        3,
+        "Al termine della fase 2, se il prezzo è vuoto, viene calcolato: mediana di Vinted se c'è "
+        "l'ISBN, altrimenti prezzo di Claude; arrotondato all'euro e mai sotto questo minimo. "
+        "Un prezzo inserito a mano non viene mai modificato.",
+        min=0,
+        max=10000,
+        group="Fase 2 · Prezzi Vinted",
+    ),
+    SettingDef(
+        "vinted_description_template",
+        "Descrizione dell'annuncio",
+        "text",
+        DEFAULT_DESCRIPTION_TEMPLATE,
+        "Segnaposto: {titolo} {autore} {editore} {anno} {collana} {lingua} {categoria} "
+        "{descrizione} {condizioni} (le condizioni del libro). Le righe in cui tutti i "
+        "segnaposto sono vuoti vengono tolte.",
+        group="Fase 3 · Bozza Vinted",
+    ),
 ]
 
 # Attesa minima tra due esecuzioni consecutive della stessa fase (una voce per
@@ -197,10 +301,38 @@ DEFINITIONS += [
     for n in ACTIVE_PHASES
 ]
 
+# Pausa di una fase automatica: i libri che la raggiungono restano "In pausa"
+# finché non la si toglie (o finché non si forza il singolo libro).
+DEFINITIONS += [
+    SettingDef(
+        pause_key(n),
+        f"Fase {n} · {PHASES[n].label}: in pausa",
+        "bool",
+        PHASES[n].paused_default,
+        "I libri che arrivano a questa fase si fermano. Togliendo la pausa ripartono tutti "
+        "(uno alla volta, rispettando l'attesa minima); un singolo libro si può forzare dalla "
+        "sua scheda.",
+        group="Fasi in pausa",
+    )
+    for n in ACTIVE_PHASES
+]
+
 BY_KEY = {d.key: d for d in DEFINITIONS}
+
+_TRUE = {"true", "1", "on", "yes", "si", "sì"}
+_FALSE = {"false", "0", "off", "no", ""}
 
 
 def _parse(d: SettingDef, raw: Any) -> Any:
+    if d.type == "bool":
+        if isinstance(raw, bool):
+            return raw
+        text = str(raw).strip().lower()
+        if text in _TRUE:
+            return True
+        if text in _FALSE:
+            return False
+        raise ValueError(f"{d.label}: valore non valido")
     if d.type == "int":
         value = int(raw)
         if d.min is not None and value < d.min:
@@ -211,11 +343,19 @@ def _parse(d: SettingDef, raw: Any) -> Any:
     return str(raw)
 
 
+def _store(value: Any) -> str:
+    return ("true" if value else "false") if isinstance(value, bool) else str(value)
+
+
+def paused_phases(settings: dict[str, Any]) -> list[int]:
+    return [n for n in ACTIVE_PHASES if settings.get(pause_key(n))]
+
+
 def seed_defaults(db: Session) -> None:
     existing = {s.key for s in db.query(Setting.key)}
     for d in DEFINITIONS:
         if d.key not in existing:
-            db.add(Setting(key=d.key, value=str(d.default)))
+            db.add(Setting(key=d.key, value=_store(d.default)))
     db.commit()
 
 
@@ -259,7 +399,7 @@ def update_settings(db: Session, values: dict[str, Any]) -> None:
     for key, value in parsed.items():
         row = db.get(Setting, key)
         if row is None:
-            db.add(Setting(key=key, value=str(value)))
+            db.add(Setting(key=key, value=_store(value)))
         else:
-            row.value = str(value)
+            row.value = _store(value)
     db.commit()

@@ -80,6 +80,10 @@ onMounted(load)
             :max="s.max ?? undefined"
             required
           />
+          <div v-else-if="s.type === 'bool'" class="form-check form-switch">
+            <input :id="s.key" v-model="values[s.key]" class="form-check-input" type="checkbox" role="switch" />
+            <label :for="s.key" class="form-check-label small">{{ values[s.key] ? 'Sì' : 'No' }}</label>
+          </div>
           <textarea
             v-else-if="s.type === 'text'"
             :id="s.key"

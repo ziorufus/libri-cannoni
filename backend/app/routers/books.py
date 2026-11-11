@@ -12,9 +12,10 @@ from sqlalchemy.orm import Session, selectinload
 from ..claude_json import book_condition, book_isbn, book_name
 from ..db import get_db
 from ..models import BOOK_CONDITIONS, Book, Photo
-from ..phases import PHASES, initial_status
+from ..phases import PHASES, initial_status, pause_key, unmet_requirements
 from ..security import CurrentUser, require_admin
 from ..settings_store import get_setting
+from ..worker import apply_pauses, load_settings
 from ..storage import (
     InvalidPhoto,
     book_dir,
@@ -53,6 +54,7 @@ def _book_summary(b: Book) -> dict:
         "id": b.id,
         "description": b.description,
         "condition": b.condition,
+        "condition_manual": bool(b.condition_manual),
         "price": b.price,
         "notes": b.notes,
         "created_by": b.created_by,
@@ -70,20 +72,40 @@ def _book_summary(b: Book) -> dict:
     }
 
 
-def _vinted_prices(b: Book) -> dict | None:
+def _json_column(value: str | None) -> dict | None:
     try:
-        return json.loads(b.vinted_prices) if b.vinted_prices else None
+        return json.loads(value) if value else None
     except ValueError:
         return None
 
 
+def _blocks(b: Book, settings: dict) -> tuple[list[dict], bool]:
+    """Motivi per cui il libro non può eseguire la fase attuale (calcolati ora),
+    e se si può forzare la pausa."""
+    phase = PHASES.get(b.phase)
+    if phase is None or phase.handler is None or b.status in ("running", "failed"):
+        return [], False
+    blocks = [{"kind": "requirement", "message": m} for m in unmet_requirements(b, settings)]
+    paused = bool(settings.get(pause_key(b.phase)))
+    forced = b.force_phase == b.phase
+    if paused and not forced:
+        blocks.append({"kind": "pause", "message": f"La fase {b.phase} ({phase.label}) è in pausa per tutti i libri."})
+    return blocks, paused and not forced
+
+
 def _book_detail(b: Book, db: Session) -> dict:
+    settings = load_settings(db)
+    blocks, can_force = _blocks(b, settings)
     return {
         **_book_summary(b),
+        "blocks": blocks,
+        "can_force": can_force,
+        "forced": b.force_phase is not None and b.force_phase == b.phase,
         "folder": str(book_dir(b.id)),
         "claude_output": b.claude_output,
         "isbn": book_isbn(b.claude_output, get_setting(db, "json_isbn_key")),
-        "vinted_prices": _vinted_prices(b),
+        "vinted_prices": _json_column(b.vinted_prices),
+        "vinted_draft": _json_column(b.vinted_draft),
         "photos": [_photo_out(p) for p in b.photos],
         "runs": [
             {
@@ -126,6 +148,8 @@ def meta(db: Session = Depends(get_db), _: CurrentUser = Depends(require_admin))
             "waiting": "In attesa di nuovo tentativo",
             "failed": "Fallito",
             "idle": "Fermo",
+            "blocked": "Bloccato",
+            "paused": "In pausa",
         },
     }
 
@@ -173,7 +197,14 @@ async def create_book(
             raise HTTPException(400, f"La foto n. {i} è troppo grande")
         images.append(data)
 
-    book = Book(notes=notes.strip(), condition=condition, created_by=cu.email, phase=0, status="ready")
+    book = Book(
+        notes=notes.strip(),
+        condition=condition,
+        condition_manual=condition is not None,
+        created_by=cu.email,
+        phase=0,
+        status="ready",
+    )
     db.add(book)
     db.flush()  # assegna l'ID
     try:
@@ -232,6 +263,7 @@ def _fill_condition_from_output(db: Session, book: Book) -> None:
 def update_book(
     book_id: int,
     body: BookUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     _: CurrentUser = Depends(require_admin),
 ):
@@ -249,10 +281,22 @@ def update_book(
         book.price = None if body.price is None else round(body.price, 2)
     if body.condition is not None:
         book.condition = _check_condition(body.condition)
+        book.condition_manual = book.condition is not None
     elif body.claude_output is not None:
         _fill_condition_from_output(db, book)
-    db.commit()
+    _unblock(db, book, request)
     return _book_detail(_load(db, book_id), db)
+
+
+def _unblock(db: Session, book: Book, request: Request) -> None:
+    """Dopo una modifica un libro bloccato torna in coda: il processo ricontrolla
+    i requisiti (es. il prezzo appena inserito) e, se ci sono, lo fa ripartire."""
+    if book.status == "blocked":
+        book.status = "ready"
+        book.last_error = ""
+    db.commit()
+    apply_pauses(db)
+    request.app.state.worker.wake()
 
 
 @router.post("/books/{book_id}/name-from-output")
@@ -280,6 +324,7 @@ def condition_from_output(book_id: int, db: Session = Depends(get_db), _: Curren
             f"{', '.join(BOOK_CONDITIONS)} nella chiave \"{get_setting(db, 'json_condition_key')}\")",
         )
     book.condition = condition
+    book.condition_manual = False
     db.commit()
     return _book_detail(_load(db, book_id), db)
 
@@ -307,6 +352,28 @@ def retry_book(
     book.attempts = 0
     book.next_attempt_at = None
     db.commit()
+    apply_pauses(db)
+    request.app.state.worker.wake()
+    return _book_detail(_load(db, book_id), db)
+
+
+@router.post("/books/{book_id}/force")
+def force_phase(
+    book_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_admin),
+):
+    """Esegue la fase attuale di questo libro anche se la fase è in pausa.
+    Non supera i requisiti (es. il prezzo): quelli vanno soddisfatti comunque."""
+    book = _load(db, book_id)
+    if not get_setting(db, pause_key(book.phase)):
+        raise HTTPException(400, "Questa fase non è in pausa")
+    book.force_phase = book.phase
+    if book.status in ("paused", "idle"):
+        book.status = "ready"
+    db.commit()
+    apply_pauses(db)
     request.app.state.worker.wake()
     return _book_detail(_load(db, book_id), db)
 
@@ -332,10 +399,12 @@ def set_phase(
     book.attempts = 0
     book.next_attempt_at = None
     book.last_error = ""
+    book.force_phase = None
     # Un eventuale worker in corso su questo libro scarterà il suo risultato
     book.lease_owner = None
     book.lease_until = None
     db.commit()
+    apply_pauses(db)
     request.app.state.worker.wake()
     return _book_detail(_load(db, book_id), db)
 

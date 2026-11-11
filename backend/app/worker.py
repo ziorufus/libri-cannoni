@@ -7,6 +7,11 @@ intervallo; se il leader muore (anche con kill -9) il sistema operativo rilascia
 il lock e un altro processo si auto-nomina leader al giro successivo. Quindi,
 con qualunque numero di --workers, c'è un solo lavoro in background alla volta.
 
+Prima di eseguire una fase si controllano pausa e requisiti (vedi phases.py):
+i libri di una fase in pausa restano "paused" (tranne quelli forzati), quelli
+con un requisito mancante diventano "blocked" e ripartono quando un admin
+modifica il libro.
+
 Come ulteriore protezione ogni libro viene comunque "prenotato" (lease) con un
 UPDATE condizionale, che SQLite esegue in modo atomico: anche due backend
 avviati per sbaglio non elaborano mai lo stesso libro.
@@ -25,21 +30,59 @@ from sqlalchemy import and_, or_, select, update
 
 from .db import SessionLocal, lock_path, utcnow
 from .models import Book, PhaseRun
-from .phases import ACTIVE_PHASES, PHASES, BookSnapshot, PhaseResult, initial_status, min_gap_key
-from .settings_store import DEFINITIONS, get_setting
+from .phases import (
+    ACTIVE_PHASES,
+    PHASES,
+    BookSnapshot,
+    PhaseResult,
+    initial_status,
+    min_gap_key,
+    unmet_requirements,
+)
+from .settings_store import DEFINITIONS, get_setting, paused_phases
 
 log = logging.getLogger(__name__)
 LEASE_MARGIN_SECONDS = 120
+# Durata minima della prenotazione di un libro (es. caricamento di molte foto su Vinted)
+MIN_LEASE_SECONDS = 1800
 
 
-def _eligible(now, phases):
+def load_settings(db) -> dict:
+    return {d.key: get_setting(db, d.key) for d in DEFINITIONS}
+
+
+def _not_paused(paused: list[int]):
+    return or_(Book.phase.notin_(paused), Book.force_phase == Book.phase)
+
+
+def apply_pauses(db, settings: dict | None = None) -> None:
+    """Allinea gli stati alle pause: "ready" -> "paused" nelle fasi in pausa (salvo
+    libri forzati) e viceversa. Fa commit."""
+    paused = paused_phases(settings or load_settings(db))
+    db.execute(
+        update(Book)
+        .where(Book.status == "ready", Book.phase.in_(paused), or_(Book.force_phase.is_(None), Book.force_phase != Book.phase))
+        .values(status="paused")
+        .execution_options(synchronize_session=False)
+    )
+    db.execute(
+        update(Book)
+        .where(Book.status == "paused", _not_paused(paused))
+        .values(status="ready")
+        .execution_options(synchronize_session=False)
+    )
+    db.commit()
+    db.expire_all()  # gli oggetti già caricati rileggono lo stato aggiornato
+
+
+def _eligible(now, phases, paused):
     lease_free = or_(Book.lease_until.is_(None), Book.lease_until < now)
     due = or_(
         Book.status == "ready",
         and_(Book.status == "waiting", Book.next_attempt_at <= now),
         Book.status == "running",  # "running" con lease scaduto: worker morto
     )
-    return and_(Book.phase.in_(phases), lease_free, due)
+    return and_(Book.phase.in_(phases), _not_paused(paused), lease_free, due)
 
 
 class Worker:
@@ -148,19 +191,21 @@ class Worker:
 
     def _claim_next(self) -> BookSnapshot | None:
         with SessionLocal() as db:
-            settings = {d.key: get_setting(db, d.key) for d in DEFINITIONS}
-            lease = settings["claude_timeout_seconds"] + LEASE_MARGIN_SECONDS
+            settings = load_settings(db)
+            apply_pauses(db, settings)
+            paused = paused_phases(settings)
+            lease = max(settings["claude_timeout_seconds"], MIN_LEASE_SECONDS) + LEASE_MARGIN_SECONDS
             phases = self._phases_ready(settings)
             if not phases:
                 return None
             now = utcnow()
             candidates = db.scalars(
-                select(Book.id).where(_eligible(now, phases)).order_by(Book.id).limit(20)
+                select(Book.id).where(_eligible(now, phases, paused)).order_by(Book.id).limit(20)
             ).all()
             for book_id in candidates:
                 claimed = db.execute(
                     update(Book)
-                    .where(Book.id == book_id, _eligible(now, phases))
+                    .where(Book.id == book_id, _eligible(now, phases, paused))
                     .values(
                         status="running",
                         lease_owner=self.id,
@@ -173,6 +218,15 @@ class Worker:
                     continue  # preso da un altro worker
                 book = db.get(Book, book_id)
                 db.refresh(book)
+                if reasons := unmet_requirements(book, settings):
+                    # Requisito mancante: il libro resta fermo finché non lo si corregge
+                    book.status = "blocked"
+                    book.last_error = "\n".join(reasons)
+                    book.lease_owner = None
+                    book.lease_until = None
+                    db.commit()
+                    log.info("Libro %s bloccato in fase %s: %s", book.id, book.phase, book.last_error)
+                    continue
                 return BookSnapshot(
                     id=book.id,
                     phase=book.phase,
@@ -181,6 +235,11 @@ class Worker:
                     photo_files=[p.filename for p in book.photos],
                     settings=settings,
                     claude_output=book.claude_output,
+                    description=book.description,
+                    price=book.price,
+                    condition=book.condition,
+                    condition_manual=bool(book.condition_manual),
+                    vinted_draft=book.vinted_draft,
                 )
         return None
 
@@ -244,6 +303,7 @@ class Worker:
                         setattr(book, key, value)
                 book.phase = snap.phase + 1
                 book.status = initial_status(book.phase)
+                book.force_phase = None
                 book.attempts = 0
                 book.next_attempt_at = None
                 book.last_error = ""
@@ -252,10 +312,10 @@ class Worker:
                 book.attempts = snap.attempt
                 book.last_error = result.error
                 max_attempts = snap.settings["phase_max_attempts"]
-                if book.attempts >= max_attempts:
+                if book.attempts >= max_attempts or not result.retry:
                     book.status = "failed"
                     book.next_attempt_at = None
-                    log.warning("Libro %s: fase %s fallita definitivamente", book.id, snap.phase)
+                    log.warning("Libro %s: fase %s fallita definitivamente: %s", book.id, snap.phase, result.error)
                 else:
                     delay = snap.settings["phase_retry_delay_minutes"]
                     book.status = "waiting"
@@ -265,6 +325,8 @@ class Worker:
                         book.id, snap.phase, book.attempts, max_attempts, delay,
                     )
             db.commit()
+            if result.ok:
+                apply_pauses(db, snap.settings)  # la nuova fase potrebbe essere in pausa
 
 
 worker = Worker()

@@ -12,30 +12,42 @@ from typing import Any
 from .config import config
 
 
-class VintedSearchError(Exception):
-    pass
+class VintedOpError(Exception):
+    """Errore in un'operazione su Vinted. `permanent`: dati non validi, ritentare
+    non serve (bisogna correggere il libro o il JSON di Claude)."""
+
+    def __init__(self, message: str, permanent: bool = False) -> None:
+        super().__init__(message)
+        self.permanent = permanent
 
 
 # Messaggio di VintedError per una risposta HTTP: "search_items -> 401: ..."
 _AUTH_ERROR = re.compile(r"-> (401|403):")
 
 
+def wrap_error(prefix: str, exc: Exception) -> VintedOpError:
+    msg = str(exc) or repr(exc)
+    if _AUTH_ERROR.search(msg):
+        msg += " — sessione Vinted scaduta? Rifai `vinted auth import`"
+    return VintedOpError(f"{prefix}: {msg}"[:4000])
+
+
 def _split(value: str) -> list[str]:
     return [v.strip() for v in value.split(",") if v.strip()]
 
 
-def _client():
+def new_client():
     try:
         from vinted import VintedClient
     except ImportError as exc:
-        raise VintedSearchError(
+        raise VintedOpError(
             "Pacchetto vinted-lister non installato nel virtualenv del backend "
             "(pip install -e <cartella del clone>)"
         ) from exc
     try:
         return VintedClient(env_path=config.vinted_env_file or None)
     except Exception as exc:  # file dei token mancante, mercato sconosciuto, ...
-        raise VintedSearchError(f"Configurazione di vinted-lister non valida: {exc}") from exc
+        raise VintedOpError(f"Configurazione di vinted-lister non valida: {exc}") from exc
 
 
 def _compact(item: dict[str, Any], host: str, item_amount) -> dict[str, Any]:
@@ -60,7 +72,7 @@ def _compact(item: dict[str, Any], host: str, item_amount) -> dict[str, Any]:
 
 def search_prices(text: str, categories: str, conditions: str, limit: int) -> dict[str, Any]:
     """Equivalente di `vinted search TEXT --category ... --condition ... --limit N`."""
-    client = _client()
+    client = new_client()
     from vinted import Resolver
     from vinted.pricing import item_amount, price_summary
 
@@ -70,22 +82,19 @@ def search_prices(text: str, categories: str, conditions: str, limit: int) -> di
         for name in _split(categories):
             cid, _ = resolver.catalog(name)
             if cid is None:
-                raise VintedSearchError(f"Categoria Vinted sconosciuta: {name}")
+                raise VintedOpError(f"Categoria Vinted sconosciuta: {name}")
             catalog_ids.append(cid)
         status_ids = []
         for name in _split(conditions):
             sid = resolver.condition_id(name)
             if sid is None:
-                raise VintedSearchError(f"Condizione Vinted sconosciuta: {name}")
+                raise VintedOpError(f"Condizione Vinted sconosciuta: {name}")
             status_ids.append(sid)
         items = client.search_all(text, limit=limit, catalog_ids=catalog_ids, status_ids=status_ids)
-    except VintedSearchError:
+    except VintedOpError:
         raise
     except Exception as exc:
-        msg = str(exc)
-        if _AUTH_ERROR.search(msg):
-            msg += " — sessione Vinted scaduta? Rifai `vinted auth import`"
-        raise VintedSearchError(f"Ricerca su Vinted non riuscita: {msg}"[:4000]) from exc
+        raise wrap_error("Ricerca su Vinted non riuscita", exc) from exc
 
     return {
         "query": text,

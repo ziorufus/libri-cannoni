@@ -114,6 +114,12 @@ const saveCondition = (value) =>
     book.value = await api(`/api/admin/books/${props.id}`, { method: 'PATCH', body: { condition: value } })
   })
 
+const forcePhase = () =>
+  act(async () => {
+    if (!confirm(`Eseguire la fase ${book.value.phase} (${phaseLabel(book.value.phase)}) per questo libro anche se è in pausa?`)) return
+    book.value = await api(`/api/admin/books/${props.id}/force`, { method: 'POST' })
+  })
+
 const conditionFromOutput = () =>
   act(async () => {
     book.value = await api(`/api/admin/books/${props.id}/condition-from-output`, { method: 'POST' })
@@ -209,7 +215,17 @@ onBeforeUnmount(() => clearInterval(timer))
             Tentativo {{ book.attempts }} fallito: nuovo tentativo {{ fmtRelative(book.next_attempt_at) }}
             ({{ fmtDate(book.next_attempt_at) }}).
           </div>
-          <div v-if="book.last_error" class="alert alert-warning small py-2 mb-2 pre-wrap">{{ book.last_error }}</div>
+          <div v-if="book.blocks?.length" class="alert alert-secondary small py-2 mb-2">
+            <div v-for="(b, i) in book.blocks" :key="i">
+              <i class="bi me-1" :class="b.kind === 'pause' ? 'bi-pause-circle' : 'bi-lock'"></i>{{ b.message }}
+            </div>
+          </div>
+          <div v-if="book.forced" class="small text-secondary mb-2">
+            <i class="bi bi-fast-forward me-1"></i>Esecuzione forzata: questa fase parte anche se è in pausa.
+          </div>
+          <div v-if="book.last_error && book.status !== 'blocked'" class="alert alert-warning small py-2 mb-2 pre-wrap">
+            {{ book.last_error }}
+          </div>
 
           <div class="d-flex flex-wrap gap-2 align-items-center">
             <button
@@ -220,8 +236,16 @@ onBeforeUnmount(() => clearInterval(timer))
             >
               <i class="bi bi-arrow-clockwise me-1"></i>Riprova ora
             </button>
-            <button v-if="idleAutomatic" class="btn btn-sm btn-outline-primary" :disabled="busy" @click="retry">
+            <button
+              v-if="idleAutomatic && !book.can_force"
+              class="btn btn-sm btn-outline-primary"
+              :disabled="busy"
+              @click="retry"
+            >
               <i class="bi bi-play me-1"></i>Esegui la fase
+            </button>
+            <button v-if="book.can_force" class="btn btn-sm btn-outline-primary" :disabled="busy" @click="forcePhase">
+              <i class="bi bi-fast-forward me-1"></i>Esegui comunque
             </button>
             <div class="input-group input-group-sm w-auto">
               <select v-model="targetPhase" class="form-select" aria-label="Fase">
@@ -277,7 +301,12 @@ onBeforeUnmount(() => clearInterval(timer))
           <template v-if="!book.condition">
             Verranno prese dal JSON di Claude al termine della fase 1, se il valore è valido.
           </template>
-          <template v-else>La fase 1 automatica non sovrascrive un valore già impostato.</template>
+          <template v-else-if="book.condition_manual">
+            Scelte a mano: valgono anche per la bozza su Vinted.
+          </template>
+          <template v-else>
+            Prese da Claude: per la bozza su Vinted si usa il campo "condizioni_vinted" di Claude.
+          </template>
         </span>
         <button
           v-if="book.claude_output"
@@ -354,7 +383,10 @@ onBeforeUnmount(() => clearInterval(timer))
         <button class="btn btn-primary" :disabled="!priceDirty || priceInvalid || busy" @click="savePrice">Salva</button>
       </div>
       <div class="small mb-4">
-        <span class="text-secondary">Lascia vuoto e salva per toglierlo.</span>
+        <span class="text-secondary">
+          Se è vuoto, al termine della fase 2 viene calcolato (mediana di Vinted o prezzo di Claude).
+          Senza prezzo la bozza su Vinted non viene creata.
+        </span>
         <button
           v-if="vinted?.summary"
           class="btn btn-link btn-sm p-0 ms-1 align-baseline"
@@ -363,6 +395,25 @@ onBeforeUnmount(() => clearInterval(timer))
         >
           Usa la mediana di Vinted ({{ fmtPrice(vinted.summary.median, vinted.items[0]?.currency) }})
         </button>
+      </div>
+
+      <!-- Bozza su Vinted -->
+      <h2 class="h6 text-uppercase text-secondary">Bozza su Vinted</h2>
+      <div class="mb-4">
+        <div v-if="book.vinted_draft" class="card border-0 shadow-sm">
+          <div class="card-body small">
+            <a :href="book.vinted_draft.edit_url" target="_blank" rel="noopener" class="fw-semibold">
+              <i class="bi bi-box-arrow-up-right me-1"></i>Bozza {{ book.vinted_draft.draft_id }}
+            </a>
+            <span class="text-secondary"> · creata {{ fmtRelative(book.vinted_draft.created_at) }}</span>
+            <div class="text-secondary mt-1">
+              {{ fmtPrice(book.vinted_draft.price, book.vinted_draft.currency) }} · {{ book.vinted_draft.category }} ·
+              {{ book.vinted_draft.condition }} · {{ book.vinted_draft.language }} · ISBN {{ book.vinted_draft.isbn }} ·
+              {{ book.vinted_draft.photos }} foto
+            </div>
+          </div>
+        </div>
+        <p v-else class="small text-secondary mb-0">Verrà creata nella fase 3.</p>
       </div>
 
       <!-- Foto -->

@@ -45,6 +45,8 @@ class Book(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     # Condizioni: uno di BOOK_CONDITIONS, oppure NULL ("usa valore di Claude")
     condition: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # True se le condizioni sono state scelte a mano (hanno la precedenza su Claude)
+    condition_manual: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     # Prezzo in euro (due decimali), impostato a mano; NULL = non deciso
     price: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_by: Mapped[str] = mapped_column(String(320), default="")
@@ -53,11 +55,13 @@ class Book(Base):
 
     # Avanzamento nelle fasi (vedi app/phases.py)
     phase: Mapped[int] = mapped_column(Integer, default=0, index=True)
-    # ready | running | waiting | failed | idle
+    # ready | running | waiting | failed | idle | blocked (manca un requisito) | paused
     status: Mapped[str] = mapped_column(String(10), default="ready", index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     next_attempt_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     last_error: Mapped[str] = mapped_column(Text, default="")
+    # Fase per cui un admin ha forzato l'esecuzione nonostante la pausa globale
+    force_phase: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Lock ("lease") per il processo in background: un solo worker alla volta
     lease_owner: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -67,6 +71,8 @@ class Book(Base):
     claude_output: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Ricerca su Vinted per ISBN (JSON: query, riepilogo prezzi, annunci trovati)
     vinted_prices: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Bozza creata su Vinted (JSON: id, link di modifica, dati inviati)
+    vinted_draft: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     photos: Mapped[list["Photo"]] = relationship(
         back_populates="book",
