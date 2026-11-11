@@ -128,11 +128,11 @@ _NOT_FOUND = re.compile(r"-> 404:")
 
 
 def delete_draft(draft_id: int) -> str:
-    """Elimina definitivamente la bozza da Vinted (come `vinted delete`).
+    """Elimina definitivamente la bozza da Vinted (come `vinted delete --draft`).
     Se su Vinted non esiste più (già eliminata a mano) non è un errore."""
     client = new_client()
     try:
-        client.delete_item(int(draft_id))
+        client.delete_draft(int(draft_id))
     except Exception as exc:
         if _NOT_FOUND.search(str(exc)):
             return f"Bozza {draft_id} non trovata su Vinted (già eliminata)"
