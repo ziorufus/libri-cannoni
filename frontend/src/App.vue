@@ -2,6 +2,7 @@
 import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { auth, logout } from './auth'
+import JobIndicators from './components/JobIndicators.vue'
 
 const open = ref(false)
 const route = useRoute()
@@ -22,7 +23,8 @@ function doLogout() {
         <span class="d-none d-sm-inline">Mettete dei libri nei vostri cannoni</span>
         <span class="d-sm-none">Libri nei cannoni</span>
       </RouterLink>
-      <button class="navbar-toggler" type="button" aria-label="Menu" @click="open = !open">
+      <JobIndicators class="order-md-last" />
+      <button class="navbar-toggler ms-auto ms-md-0" type="button" aria-label="Menu" @click="open = !open">
         <span class="navbar-toggler-icon"></span>
       </button>
       <div class="collapse navbar-collapse" :class="{ show: open }">

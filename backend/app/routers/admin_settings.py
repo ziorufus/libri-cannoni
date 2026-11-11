@@ -34,4 +34,5 @@ def write_settings(
         raise HTTPException(400, str(exc)) from exc
     apply_pauses(db)  # pause aggiunte o tolte: aggiorna subito gli stati
     request.app.state.worker.wake()  # applica subito il nuovo intervallo
+    request.app.state.worker.wake_jobs()  # job attivati/disattivati o intervalli cambiati
     return all_settings(db)

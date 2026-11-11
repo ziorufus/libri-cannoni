@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .access import ensure_admin
 from .config import config
 from .db import Base, SessionLocal, engine, init_lock
-from .routers import access, admin_settings, auth, books, vinted
+from .routers import access, admin_settings, auth, books, jobs, vinted
 from .security import CurrentUser, require_user
 from .settings_store import seed_defaults
 from .worker import worker
@@ -49,6 +49,7 @@ app.include_router(books.photos_router)
 app.include_router(access.router)
 app.include_router(admin_settings.router)
 app.include_router(vinted.router)
+app.include_router(jobs.router)
 
 
 @app.get("/api/health")

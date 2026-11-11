@@ -127,3 +127,15 @@ class Setting(Base):
 
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value: Mapped[str] = mapped_column(Text)
+
+
+class JobState(Base):
+    """Ultimo esito di ogni job periodico (vedi jobs.py)."""
+
+    __tablename__ = "job_states"
+
+    name: Mapped[str] = mapped_column(String(50), primary_key=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)  # NULL = da eseguire subito
+    ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    message: Mapped[str] = mapped_column(Text, default="")
+    data: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON specifico del job

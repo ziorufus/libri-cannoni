@@ -82,6 +82,21 @@ più worker non lavorano mai sullo stesso libro.
 Per aggiungere una fase: scrivere un handler in [backend/app/phases.py](backend/app/phases.py)
 e registrarlo in `PHASES`.
 
+### Job periodici
+
+Il leader esegue anche dei job periodici ([backend/app/jobs.py](backend/app/jobs.py)), in un
+task separato dalle fasi. Ognuno si attiva/disattiva e ha il suo intervallo in
+**Impostazioni → Job periodici**; esito e "Esegui ora" nella pagina **Admin → Job**
+(lo stato è nella tabella `job_states`, creata all'avvio).
+
+| Job | Default | Cosa fa |
+|---|---|---|
+| Sessione Vinted | ogni 50 min (5 min se non valida) | `vinted auth status`, che rinnova anche i token. Se la sessione non è valida mette in **pausa automatica** le fasi 2–5; ripartono da sole quando torna valida (anche subito dopo un import da Admin → Vinted) |
+| Uso di Claude | ogni 5 min | `claude -p /usage`: percentuali di sessione e settimana, mostrate nella barra in alto. Se una delle due supera la soglia (default 80%) mette in pausa automatica la fase 1; riparte quando entrambe sono sotto i margini (default 70%) |
+
+Le pause automatiche si sommano a quelle manuali: una fase messa in pausa a mano
+resta in pausa anche quando la condizione del job rientra.
+
 ## Frontend
 
 ```bash

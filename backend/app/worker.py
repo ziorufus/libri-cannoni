@@ -15,6 +15,9 @@ modifica il libro.
 Come ulteriore protezione ogni libro viene comunque "prenotato" (lease) con un
 UPDATE condizionale, che SQLite esegue in modo atomico: anche due backend
 avviati per sbaglio non elaborano mai lo stesso libro.
+
+Il leader esegue anche i job periodici (jobs.py) in un secondo task, così un
+job non aspetta la fine di una fase lunga (es. un'analisi di Claude).
 """
 
 import asyncio
@@ -29,7 +32,8 @@ from datetime import timedelta
 from sqlalchemy import and_, or_, select, update
 
 from .db import SessionLocal, lock_path, utcnow
-from .models import Book, PhaseRun
+from .jobs import JOBS, JobResult, auto_pauses, load_data, next_run, save_result
+from .models import Book, JobState, PhaseRun
 from .phases import (
     ACTIVE_PHASES,
     PHASES,
@@ -48,7 +52,9 @@ MIN_LEASE_SECONDS = 1800
 
 
 def load_settings(db) -> dict:
-    return {d.key: get_setting(db, d.key) for d in DEFINITIONS}
+    settings = {d.key: get_setting(db, d.key) for d in DEFINITIONS}
+    settings["auto_pauses"] = auto_pauses(db, settings)  # fase -> motivo
+    return settings
 
 
 def _not_paused(paused: list[int]):
@@ -90,6 +96,8 @@ class Worker:
         self.id = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
         self._wake = asyncio.Event()
         self._task: asyncio.Task | None = None
+        self._jobs_task: asyncio.Task | None = None
+        self._jobs_wake = asyncio.Event()
         self._lock_file = None  # aperto e bloccato finché questo processo è leader
         # Attese tra esecuzioni della stessa fase: solo in memoria (un riavvio le azzera)
         self._last_end: dict[int, float] = {}  # fase -> fine dell'ultima esecuzione (monotonic)
@@ -128,15 +136,17 @@ class Worker:
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._loop(), name="books-worker")
+        self._jobs_task = asyncio.create_task(self._jobs_loop(), name="jobs")
         log.info("Worker %s avviato", self.id)
 
     async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+        for task in (self._jobs_task, self._task):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
         self._resign()
 
     def wake(self) -> None:
@@ -167,6 +177,65 @@ class Worker:
             except TimeoutError:
                 pass
             self._wake.clear()
+
+    def wake_jobs(self) -> None:
+        """Ricontrolla subito i job (es. dopo "Esegui ora" o un cambio di impostazioni)."""
+        self._jobs_wake.set()
+
+    # --- job periodici ---------------------------------------------------------
+
+    async def _jobs_loop(self) -> None:
+        while True:
+            sleep = 60.0
+            try:
+                if self.is_leader:  # la leadership la prende _loop
+                    sleep = await self._run_due_jobs()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("Errore nel ciclo dei job")
+            try:
+                await asyncio.wait_for(self._jobs_wake.wait(), timeout=max(1.0, min(sleep, 60.0)))
+            except TimeoutError:
+                pass
+            self._jobs_wake.clear()
+
+    async def _run_due_jobs(self) -> float:
+        """Esegue i job scaduti; restituisce i secondi fino alla prossima scadenza."""
+        for job in JOBS.values():
+            with SessionLocal() as db:
+                settings = load_settings(db)
+                state = db.get(JobState, job.name)
+                due = next_run(job, state, settings)
+                previous = load_data(state)
+            if due is None or due > utcnow():
+                continue
+            try:
+                result = await job.run(settings, previous)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.exception("Errore nel job %s", job.name)
+                result = JobResult(False, f"Errore interno: {exc!r}", previous)
+            log.info("Job %s: %s", job.name, result.message.splitlines()[0] if result.message else result.ok)
+            await asyncio.to_thread(self._save_job, job.name, result)
+        with SessionLocal() as db:
+            settings = load_settings(db)
+            dues = [d for j in JOBS.values() if (d := next_run(j, db.get(JobState, j.name), settings))]
+        if not dues:
+            return 60.0
+        return max(0.0, (min(dues) - utcnow()).total_seconds())
+
+    def _save_job(self, name: str, result) -> None:
+        with SessionLocal() as db:
+            before = paused_phases(load_settings(db))
+            save_result(db, name, result)
+            db.commit()
+            settings = load_settings(db)
+            apply_pauses(db, settings)
+            if paused_phases(settings) != before:
+                log.info("Pause automatiche aggiornate: fasi in pausa %s", paused_phases(settings))
+                self.wake()  # fasi ripartite: il ciclo dei libri riparte subito
 
     def _interval(self) -> int:
         with SessionLocal() as db:

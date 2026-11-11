@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from .models import Setting
+from .jobs import JOBS
 from .phases import ACTIVE_PHASES, PHASES, min_gap_key, pause_key
 
 DEFAULT_DESCRIPTION_TEMPLATE = """\
@@ -350,6 +351,75 @@ DEFINITIONS += [
     for n in ACTIVE_PHASES
 ]
 
+# Job periodici: attivazione e intervallo, generati dal registro dei job
+for _job in JOBS.values():
+    DEFINITIONS += [
+        SettingDef(_job.enabled_key, f"{_job.label}: attivo", "bool", True, _job.description, group="Job periodici"),
+        SettingDef(
+            _job.interval_key,
+            f"{_job.label}: ogni quanti minuti",
+            "int",
+            _job.interval_default,
+            min=1,
+            max=1440,
+            group="Job periodici",
+        ),
+    ]
+DEFINITIONS += [
+    SettingDef(
+        "job_vinted_session_retry_minutes",
+        "Sessione Vinted: ricontrollo se non valida (minuti)",
+        "int",
+        5,
+        "Finché la sessione non è valida si ricontrolla più spesso, così le fasi Vinted "
+        "ripartono presto (anche un errore di rete momentaneo le mette in pausa).",
+        min=1,
+        max=1440,
+        group="Job periodici",
+    ),
+    SettingDef(
+        "claude_pause_session_percent",
+        "Claude: pausa oltre questa % della sessione",
+        "int",
+        80,
+        "Basta una soglia superata (sessione o settimana) per mettere in pausa l'analisi.",
+        min=1,
+        max=100,
+        group="Job periodici",
+    ),
+    SettingDef(
+        "claude_resume_session_percent",
+        "Claude: ripresa sotto questa % della sessione",
+        "int",
+        70,
+        "Margine per ripartire: deve essere minore della soglia di pausa.",
+        min=0,
+        max=100,
+        group="Job periodici",
+    ),
+    SettingDef(
+        "claude_pause_week_percent",
+        "Claude: pausa oltre questa % della settimana",
+        "int",
+        80,
+        "Uso settimanale di tutti i modelli.",
+        min=1,
+        max=100,
+        group="Job periodici",
+    ),
+    SettingDef(
+        "claude_resume_week_percent",
+        "Claude: ripresa sotto questa % della settimana",
+        "int",
+        70,
+        "Margine per ripartire: deve essere minore della soglia di pausa.",
+        min=0,
+        max=100,
+        group="Job periodici",
+    ),
+]
+
+
 BY_KEY = {d.key: d for d in DEFINITIONS}
 
 _TRUE = {"true", "1", "on", "yes", "si", "sì"}
@@ -381,7 +451,10 @@ def _store(value: Any) -> str:
 
 
 def paused_phases(settings: dict[str, Any]) -> list[int]:
-    return [n for n in ACTIVE_PHASES if settings.get(pause_key(n))]
+    """Fasi in pausa: manuali (impostazioni) più quelle automatiche dei job
+    (`settings["auto_pauses"]`, aggiunto da worker.load_settings)."""
+    auto = settings.get("auto_pauses") or {}
+    return [n for n in ACTIVE_PHASES if settings.get(pause_key(n)) or n in auto]
 
 
 def seed_defaults(db: Session) -> None:

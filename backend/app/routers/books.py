@@ -14,7 +14,7 @@ from ..db import get_db, utcnow
 from ..models import BOOK_CONDITIONS, Book, PhaseRun, Photo
 from ..phases import PHASES, PUBLISH_PHASE, initial_status, pause_key, suggested_price, unmet_requirements
 from ..security import CurrentUser, require_admin
-from ..settings_store import get_setting
+from ..settings_store import get_setting, paused_phases
 from ..vinted_draft import delete_draft
 from ..vinted_search import VintedOpError
 from ..worker import apply_pauses, load_settings
@@ -89,10 +89,15 @@ def _blocks(b: Book, settings: dict) -> tuple[list[dict], bool]:
     if phase is None or phase.handler is None or b.status in ("running", "failed"):
         return [], False
     blocks = [{"kind": "requirement", "message": m} for m in unmet_requirements(b, settings)]
-    paused = bool(settings.get(pause_key(b.phase)))
+    manual = bool(settings.get(pause_key(b.phase)))
+    auto = (settings.get("auto_pauses") or {}).get(b.phase)
+    paused = manual or bool(auto)
     forced = b.force_phase == b.phase
     if paused and not forced:
-        blocks.append({"kind": "pause", "message": f"La fase {b.phase} ({phase.label}) è in pausa per tutti i libri."})
+        if manual:
+            blocks.append({"kind": "pause", "message": f"La fase {b.phase} ({phase.label}) è in pausa per tutti i libri."})
+        if auto:
+            blocks.append({"kind": "pause", "message": f"Pausa automatica: {auto}"})
     return blocks, paused and not forced and not any(b["kind"] == "requirement" for b in blocks)
 
 
@@ -371,9 +376,10 @@ def force_phase(
     """Esegue la fase attuale di questo libro anche se la fase è in pausa.
     Non supera i requisiti (es. il prezzo): quelli vanno soddisfatti comunque."""
     book = _load(db, book_id)
-    if not get_setting(db, pause_key(book.phase)):
+    settings = load_settings(db)
+    if book.phase not in paused_phases(settings):
         raise HTTPException(400, "Questa fase non è in pausa")
-    if reasons := unmet_requirements(book, load_settings(db)):
+    if reasons := unmet_requirements(book, settings):
         raise HTTPException(400, "Non si può forzare: " + " ".join(reasons))
     book.force_phase = book.phase
     if book.status in ("paused", "idle"):

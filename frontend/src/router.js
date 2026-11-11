@@ -35,6 +35,7 @@ const routes = [
         props: (r) => ({ id: Number(r.params.id) }),
       },
       { path: 'accessi', name: 'access', component: () => import('./views/admin/AccessView.vue') },
+      { path: 'job', name: 'jobs', component: () => import('./views/admin/JobsView.vue') },
       { path: 'vinted', name: 'vinted', component: () => import('./views/admin/VintedView.vue') },
       { path: 'impostazioni', name: 'settings', component: () => import('./views/admin/SettingsView.vue') },
     ],

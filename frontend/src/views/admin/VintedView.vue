@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { api } from '../../api'
+import { refreshJobs } from '../../jobStatus'
 
 const curl = ref('')
 const busy = ref(false)
@@ -23,6 +24,7 @@ async function run(fn) {
 const check = () =>
   run(async () => {
     status.value = await api('/api/admin/vinted/status')
+    refreshJobs() // l'esito aggiorna anche l'indicatore nella barra
   })
 
 const doImport = () =>
@@ -31,6 +33,7 @@ const doImport = () =>
     // Il cURL contiene i token: non lo si lascia nella pagina
     if (imported.value.ok) curl.value = ''
     status.value = null
+    refreshJobs()
   })
 
 onMounted(check)
