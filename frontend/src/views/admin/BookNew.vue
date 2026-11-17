@@ -252,7 +252,10 @@ onBeforeRouteLeave(() => {
         <template v-else>
           <i class="bi bi-camera-video-off display-5 d-block mb-2"></i>
           <p class="small mb-3">{{ cameraError || 'Fotocamera spenta' }}</p>
-          <button class="btn btn-outline-light btn-sm" @click="startCamera">Riprova</button>
+          <button class="btn btn-outline-light btn-sm" @click="startCamera">
+            <template v-if="cameraError">Riprova</template>
+            <template v-else><i class="bi bi-camera-video me-1"></i>Accendi fotocamera</template>
+          </button>
         </template>
       </div>
       <span v-if="stream && resolution" class="badge text-bg-dark position-absolute top-0 start-0 m-2 opacity-75">
@@ -261,6 +264,15 @@ onBeforeRouteLeave(() => {
       <span class="badge text-bg-light position-absolute top-0 end-0 m-2 fs-6">
         <i class="bi bi-images me-1"></i>{{ photos.length }}
       </span>
+      <button
+        v-if="stream"
+        type="button"
+        class="btn btn-sm btn-dark opacity-75 position-absolute bottom-0 end-0 m-2"
+        title="Spegni la fotocamera (la scrittura delle note diventa più fluida)"
+        @click="stopCamera"
+      >
+        <i class="bi bi-camera-video-off me-1"></i>Spegni
+      </button>
     </div>
 
     <div class="d-flex align-items-center justify-content-between gap-2 mb-3">
@@ -338,6 +350,7 @@ onBeforeRouteLeave(() => {
         id="notes"
         v-model="notes"
         class="form-control"
+        @focus="stopCamera"
         rows="3"
         placeholder="Informazioni che non si vedono dalle foto (es. pagine sottolineate, dedica, provenienza…)"
       ></textarea>
