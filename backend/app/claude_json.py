@@ -49,49 +49,28 @@ def book_condition(output: str | None, key: str) -> str | None:
     return value if value in BOOK_CONDITIONS else None
 
 
-ELLIPSIS = "…"
 _PUNCT = " ,.;:-–—…!?'\"«»"
 
 
-def _trim(text: str, limit: int) -> str:
-    """I primi `limit` caratteri di `text`, possibilmente tagliati tra due parole,
-    senza punteggiatura finale."""
-    if len(text) <= limit:
-        return text.rstrip(_PUNCT)
-    cut = text[:limit]
-    space = cut.rfind(" ")
-    if space >= limit * 2 // 3:  # non si perde troppo: si taglia sulla parola
-        cut = cut[:space]
-    return cut.rstrip(_PUNCT)
-
-
-def _cut(text: str, limit: int) -> str:
-    """Accorcia `text` a `limit` caratteri, puntini finali compresi."""
+def _trim_words(text: str, limit: int) -> str:
+    """I primi `limit` caratteri di `text`, tagliati tra due parole (una parola non
+    viene mai spezzata, tranne se è l'unica), senza punteggiatura finale."""
     if len(text) <= limit:
         return text
-    return _trim(text, limit - 1) + ELLIPSIS if limit > 1 else ELLIPSIS[:limit]
-
-
-def _shorten_title(title: str, limit: int) -> str:
-    """Accorcia il titolo a `limit` caratteri mettendo i puntini in mezzo e tenendo
-    l'ultima parola ("Storia della letteratura… superiori"): Vinted rifiuta i
-    titoli con troppi simboli di fila, come "… -" prima dell'autore."""
-    if len(title) <= limit:
-        return title
-    words = title.split()
-    last = words[-1].strip(_PUNCT) if len(words) > 1 else ""
-    room = limit - len(last) - 2  # "… " prima dell'ultima parola
-    head = _trim(" ".join(words[:-1]), room) if last and room >= 8 else ""
-    if not head:  # una parola sola, o ultima parola troppo lunga: taglio senza puntini
-        return _trim(title, limit)
-    return f"{head}{ELLIPSIS} {last}"
+    cut = text[:limit]
+    if text[limit] != " ":  # il taglio cade dentro una parola: la si toglie
+        space = cut.rfind(" ")
+        if space > 0:
+            cut = cut[:space]
+    return cut.rstrip(_PUNCT)
 
 
 def book_name(output: str | None, title_key: str, author_key: str, max_length: int | None = None) -> str | None:
     """'Titolo - Autore' (o solo 'Titolo'); None se il JSON non c'è o manca il titolo.
 
-    Con `max_length` il risultato non supera quei caratteri: si accorcia il titolo
-    (l'autore resta intero); se nemmeno così ci sta, si accorcia tutto."""
+    Con `max_length`: se 'Titolo - Autore' è troppo lungo resta solo il titolo; se
+    lo è anche il titolo, lo si tronca su una parola intera, senza puntini (Vinted
+    rifiuta i titoli con simboli come "… -")."""
     data = parse_output(output)
     if data is None:
         return None
@@ -99,13 +78,10 @@ def book_name(output: str | None, title_key: str, author_key: str, max_length: i
     if not title:
         return None
     author = _lookup(data, author_key) if author_key else ""
-    suffix = f" - {author}" if author else ""
-    if not max_length or len(title) + len(suffix) <= max_length:
-        return title + suffix
-    room = max_length - len(suffix)
-    if room >= 10:  # resta spazio per un titolo riconoscibile
-        return _shorten_title(title, room) + suffix
-    return _cut(title + suffix, max_length)
+    name = f"{title} - {author}" if author else title
+    if not max_length or len(name) <= max_length:
+        return name
+    return _trim_words(title, max_length)
 
 
 _ISBN_CHUNK = re.compile(r"[0-9Xx][0-9Xx \t-]{8,}[0-9Xx]")

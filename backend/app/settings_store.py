@@ -290,7 +290,8 @@ DEFINITIONS: list[SettingDef] = [
         "int",
         100,
         "Limite di Vinted per il titolo dell'annuncio (il nome del libro). Il nome \"Titolo - Autore\" "
-        "ricavato dal JSON di Claude viene accorciato per starci, tagliando il titolo (con …); il "
+        "ricavato dal JSON di Claude, se è troppo lungo, diventa solo \"Titolo\" (troncato su una parola "
+        "intera, senza puntini, se serve ancora); il "
         "segnaposto {titolo} della descrizione resta completo. Un nome più lungo inserito a mano fa "
         "fallire la fase 3.",
         min=20,
