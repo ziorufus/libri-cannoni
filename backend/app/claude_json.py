@@ -49,8 +49,27 @@ def book_condition(output: str | None, key: str) -> str | None:
     return value if value in BOOK_CONDITIONS else None
 
 
-def book_name(output: str | None, title_key: str, author_key: str) -> str | None:
-    """'Titolo - Autore' (o solo 'Titolo'); None se il JSON non c'è o manca il titolo."""
+ELLIPSIS = "…"
+
+
+def _cut(text: str, limit: int) -> str:
+    """Accorcia `text` a `limit` caratteri, puntini compresi, possibilmente tra due parole."""
+    if len(text) <= limit:
+        return text
+    if limit <= 1:
+        return ELLIPSIS[:limit]
+    cut = text[: limit - 1]
+    space = cut.rfind(" ")
+    if space >= (limit - 1) * 2 // 3:  # non si perde troppo: si taglia sulla parola
+        cut = cut[:space]
+    return cut.rstrip(" ,.;:-–—") + ELLIPSIS
+
+
+def book_name(output: str | None, title_key: str, author_key: str, max_length: int | None = None) -> str | None:
+    """'Titolo - Autore' (o solo 'Titolo'); None se il JSON non c'è o manca il titolo.
+
+    Con `max_length` il risultato non supera quei caratteri: si accorcia il titolo
+    (l'autore resta intero); se nemmeno così ci sta, si accorcia tutto."""
     data = parse_output(output)
     if data is None:
         return None
@@ -58,7 +77,13 @@ def book_name(output: str | None, title_key: str, author_key: str) -> str | None
     if not title:
         return None
     author = _lookup(data, author_key) if author_key else ""
-    return f"{title} - {author}" if author else title
+    suffix = f" - {author}" if author else ""
+    if not max_length or len(title) + len(suffix) <= max_length:
+        return title + suffix
+    room = max_length - len(suffix)
+    if room >= 10:  # resta spazio per un titolo riconoscibile
+        return _cut(title, room) + suffix
+    return _cut(title + suffix, max_length)
 
 
 _ISBN_CHUNK = re.compile(r"[0-9Xx][0-9Xx \t-]{8,}[0-9Xx]")

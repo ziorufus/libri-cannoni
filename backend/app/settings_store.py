@@ -147,7 +147,8 @@ DEFINITIONS: list[SettingDef] = [
         "str",
         "autore",
         "Chiave del JSON di Claude che contiene l'autore (se è un elenco, gli autori vengono "
-        "separati da virgole). Il nome del libro diventa \"Titolo - Autore\".",
+        "separati da virgole). Il nome del libro diventa \"Titolo - Autore\" (accorciato se supera "
+        "la lunghezza massima del titolo).",
         group="Dati dal JSON di Claude",
     ),
     SettingDef(
@@ -282,6 +283,19 @@ DEFINITIONS: list[SettingDef] = [
         min=0,
         max=10000,
         group="Fase 2 · Prezzi Vinted",
+    ),
+    SettingDef(
+        "title_max_length",
+        "Lunghezza massima del titolo",
+        "int",
+        100,
+        "Limite di Vinted per il titolo dell'annuncio (il nome del libro). Il nome \"Titolo - Autore\" "
+        "ricavato dal JSON di Claude viene accorciato per starci, tagliando il titolo (con …); il "
+        "segnaposto {titolo} della descrizione resta completo. Un nome più lungo inserito a mano fa "
+        "fallire la fase 3.",
+        min=20,
+        max=1000,
+        group="Fase 3 · Bozza Vinted",
     ),
     SettingDef(
         "vinted_description_template",

@@ -260,7 +260,12 @@ class BookUpdate(BaseModel):
 
 
 def _name_from_output(db: Session, output: str | None) -> str | None:
-    return book_name(output, get_setting(db, "json_title_key"), get_setting(db, "json_author_key"))
+    return book_name(
+        output,
+        get_setting(db, "json_title_key"),
+        get_setting(db, "json_author_key"),
+        get_setting(db, "title_max_length"),
+    )
 
 
 def _fill_condition_from_output(db: Session, book: Book) -> None:

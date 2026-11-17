@@ -156,7 +156,9 @@ async def run_claude(book: BookSnapshot) -> PhaseResult:
     updates = {"claude_output": out}
     # Se l'output è un JSON con il titolo, il libro prende il nome "Titolo - Autore".
     # Se non lo è, la fase riesce comunque e il nome resta vuoto.
-    name = book_name(out, book.settings["json_title_key"], book.settings["json_author_key"])
+    name = book_name(
+        out, book.settings["json_title_key"], book.settings["json_author_key"], book.settings["title_max_length"]
+    )
     if name:
         updates["description"] = name
     fill = {}
@@ -259,6 +261,8 @@ async def create_vinted_draft(book: BookSnapshot) -> PhaseResult:
     title = (book.description or "").strip()
     if not title:
         return fail("Il libro non ha un nome (titolo dell'annuncio)")
+    if len(title) > (limit := s["title_max_length"]):
+        return fail(f"Il nome del libro è lungo {len(title)} caratteri: Vinted ne accetta al massimo {limit}. Accorcialo.")
     if book.price is None:
         return fail("Manca il prezzo")
 
