@@ -50,19 +50,41 @@ def book_condition(output: str | None, key: str) -> str | None:
 
 
 ELLIPSIS = "…"
+_PUNCT = " ,.;:-–—…!?'\"«»"
+
+
+def _trim(text: str, limit: int) -> str:
+    """I primi `limit` caratteri di `text`, possibilmente tagliati tra due parole,
+    senza punteggiatura finale."""
+    if len(text) <= limit:
+        return text.rstrip(_PUNCT)
+    cut = text[:limit]
+    space = cut.rfind(" ")
+    if space >= limit * 2 // 3:  # non si perde troppo: si taglia sulla parola
+        cut = cut[:space]
+    return cut.rstrip(_PUNCT)
 
 
 def _cut(text: str, limit: int) -> str:
-    """Accorcia `text` a `limit` caratteri, puntini compresi, possibilmente tra due parole."""
+    """Accorcia `text` a `limit` caratteri, puntini finali compresi."""
     if len(text) <= limit:
         return text
-    if limit <= 1:
-        return ELLIPSIS[:limit]
-    cut = text[: limit - 1]
-    space = cut.rfind(" ")
-    if space >= (limit - 1) * 2 // 3:  # non si perde troppo: si taglia sulla parola
-        cut = cut[:space]
-    return cut.rstrip(" ,.;:-–—") + ELLIPSIS
+    return _trim(text, limit - 1) + ELLIPSIS if limit > 1 else ELLIPSIS[:limit]
+
+
+def _shorten_title(title: str, limit: int) -> str:
+    """Accorcia il titolo a `limit` caratteri mettendo i puntini in mezzo e tenendo
+    l'ultima parola ("Storia della letteratura… superiori"): Vinted rifiuta i
+    titoli con troppi simboli di fila, come "… -" prima dell'autore."""
+    if len(title) <= limit:
+        return title
+    words = title.split()
+    last = words[-1].strip(_PUNCT) if len(words) > 1 else ""
+    room = limit - len(last) - 2  # "… " prima dell'ultima parola
+    head = _trim(" ".join(words[:-1]), room) if last and room >= 8 else ""
+    if not head:  # una parola sola, o ultima parola troppo lunga: taglio senza puntini
+        return _trim(title, limit)
+    return f"{head}{ELLIPSIS} {last}"
 
 
 def book_name(output: str | None, title_key: str, author_key: str, max_length: int | None = None) -> str | None:
@@ -82,7 +104,7 @@ def book_name(output: str | None, title_key: str, author_key: str, max_length: i
         return title + suffix
     room = max_length - len(suffix)
     if room >= 10:  # resta spazio per un titolo riconoscibile
-        return _cut(title, room) + suffix
+        return _shorten_title(title, room) + suffix
     return _cut(title + suffix, max_length)
 
 
