@@ -204,10 +204,10 @@ async function submit() {
     form.append('photos', p.blob, `foto-${String(i + 1).padStart(2, '0')}.${ext}`)
   })
   try {
-    const book = await uploadForm('/api/admin/books', form, (p) => (progress.value = p))
+    await uploadForm('/api/admin/books', form, (p) => (progress.value = p))
     submitted = true
     stopCamera()
-    router.push({ name: 'book', params: { id: book.id } })
+    router.push({ name: 'books' })
   } catch (e) {
     submitError.value = e.message
   } finally {
