@@ -34,7 +34,7 @@ const pct = (v) => `${Math.round(v)}%`
       :title="vinted.ok ? 'Sessione Vinted valida' : 'Sessione Vinted non valida: fasi Vinted in pausa'"
     >
       <i class="bi" :class="vinted.ok ? 'bi-check-circle' : 'bi-x-circle'"></i>
-      <span class="d-none d-sm-inline ms-1">Vinted</span>
+      <span class="ms-1">Vinted</span>
     </span>
     <span
       v-if="claude"
