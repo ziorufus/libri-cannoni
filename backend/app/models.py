@@ -76,6 +76,8 @@ class Book(Base):
     # Vendita (fase "Venduto"): cifra incassata e data; price resta il prezzo dell'annuncio
     sold_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     sold_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # Venduto segnato a mano (es. fuori da Vinted): la sincronizzazione con Vinted non lo tocca
+    sold_manual: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
     photos: Mapped[list["Photo"]] = relationship(
         back_populates="book",

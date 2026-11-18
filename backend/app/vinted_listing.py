@@ -7,6 +7,7 @@ venduto `vinted item` risponde 404, e per un nascosto non riporta `is_hidden`.
 Come le altre funzioni Vinted, vanno chiamate in un thread.
 """
 
+import re
 from typing import Any
 
 from .vinted_search import VintedOpError, new_client, wrap_error
@@ -85,4 +86,20 @@ def set_hidden(item_id: int, hidden: bool) -> None:
         raise wrap_error(f"Vinted non ha permesso di {what} l'annuncio", exc) from exc
 
 
-__all__ = ["STATES", "VintedOpError", "compact", "find_listing", "listing_state", "set_hidden", "wardrobe_page"]
+_NOT_FOUND = re.compile(r"-> 404:")
+
+
+def delete_listing(item_id: int) -> str:
+    """Elimina definitivamente un annuncio pubblicato (come `vinted delete ID`).
+    Se non esiste più (404) non è un errore."""
+    client = new_client()
+    try:
+        client.delete_item(int(item_id))
+    except Exception as exc:
+        if _NOT_FOUND.search(str(exc)):
+            return f"Annuncio {item_id} non trovato su Vinted (già eliminato)"
+        raise wrap_error("Vinted non ha permesso di eliminare l'annuncio", exc) from exc
+    return f"Annuncio {item_id} eliminato da Vinted"
+
+
+__all__ = ["STATES", "VintedOpError", "compact", "delete_listing", "find_listing", "listing_state", "set_hidden", "wardrobe_page"]

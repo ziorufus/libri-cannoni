@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
@@ -27,7 +27,7 @@ from ..phases import (
 from ..security import CurrentUser, require_admin
 from ..settings_store import get_setting, paused_phases
 from ..vinted_draft import delete_draft
-from ..vinted_listing import find_listing, set_hidden
+from ..vinted_listing import delete_listing, find_listing, set_hidden
 from ..vinted_search import VintedOpError
 from ..worker import apply_pauses, load_settings
 from ..storage import (
@@ -72,6 +72,7 @@ def _book_summary(b: Book) -> dict:
         "price": b.price,
         "sold_price": b.sold_price,
         "sold_at": b.sold_at,
+        "sold_manual": bool(b.sold_manual),
         "notes": b.notes,
         "created_by": b.created_by,
         "created_at": b.created_at,
@@ -496,6 +497,8 @@ def _manual_run(db: Session, book: Book, cu: CurrentUser, output: str) -> None:
 async def vinted_refresh(book_id: int, db: Session = Depends(get_db), cu: CurrentUser = Depends(require_admin)):
     """Legge l'annuncio dal guardaroba di Vinted e allinea fase e prezzo del libro."""
     book, iid = _listed_book(db, book_id, set(LISTING_PHASE_NUMBERS))
+    if book.sold_manual:
+        raise HTTPException(400, "Libro segnato come venduto a mano: non si aggiorna da Vinted")
     try:
         listing = await asyncio.to_thread(find_listing, iid)
     except VintedOpError as exc:
@@ -534,19 +537,42 @@ async def vinted_unhide(book_id: int, db: Session = Depends(get_db), cu: Current
     return await _hide(db, book_id, cu, False)
 
 
+LISTING_ACTIONS = {"none": "annuncio non modificato", "hide": "annuncio nascosto", "delete": "annuncio eliminato"}
+
+
 class SoldIn(BaseModel):
     sold_price: float | None = Field(default=None, ge=0, le=100000)
+    # Cosa fare dell'annuncio su Vinted (es. libro venduto fuori da Vinted)
+    listing_action: Literal["none", "hide", "delete"] = "delete"
 
 
 @router.post("/books/{book_id}/mark-sold")
-def mark_sold(book_id: int, body: SoldIn, db: Session = Depends(get_db), cu: CurrentUser = Depends(require_admin)):
-    """Segna il libro come venduto (senza chiamare Vinted) con la cifra incassata."""
+async def mark_sold(book_id: int, body: SoldIn, db: Session = Depends(get_db), cu: CurrentUser = Depends(require_admin)):
+    """Segna il libro come venduto con la cifra incassata e, a scelta, nasconde o
+    elimina l'annuncio su Vinted. Prima Vinted: se fallisce il libro resta com'era.
+    Il venduto segnato a mano non viene più toccato dalla sincronizzazione con Vinted."""
     allowed = {LISTING_PHASES[s] for s in ("live", "hidden", "reserved")}
-    book, _iid = _listed_book(db, book_id, allowed)
+    book, iid = _listed_book(db, book_id, allowed)
+    action = body.listing_action
+    vinted_note = ""
+    try:
+        if action == "hide" and book.phase != LISTING_PHASES["hidden"]:
+            await asyncio.to_thread(set_hidden, iid, True)
+        elif action == "delete":
+            vinted_note = await asyncio.to_thread(delete_listing, iid)
+    except VintedOpError as exc:
+        raise HTTPException(502, str(exc)) from exc
     book.sold_price = round(body.sold_price, 2) if body.sold_price is not None else book.price
     book.sold_at = utcnow()
+    book.sold_manual = True
+    draft = _json_column(book.vinted_draft) or {}
+    draft.update(listing_action=action, listing_action_at=utcnow().isoformat(timespec="seconds"))
+    book.vinted_draft = json.dumps(draft, ensure_ascii=False)
     move_to_listing_phase(book, LISTING_PHASES["sold"])
-    _manual_run(db, book, cu, f"Segnato come venduto a {eur(book.sold_price)}")
+    output = f"Segnato come venduto a {eur(book.sold_price)} · {LISTING_ACTIONS[action]}"
+    if vinted_note and "già eliminato" in vinted_note:
+        output += " (era già stato eliminato)"
+    _manual_run(db, book, cu, output)
     db.commit()
     db.expire_all()
     return _book_detail(_load(db, book_id), db)

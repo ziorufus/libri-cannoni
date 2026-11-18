@@ -59,6 +59,13 @@ const movablePhases = computed(() => meta.phases.filter((p) => !LISTING[p.number
 const listingMessage = ref('')
 const soldModal = ref(false)
 const soldDraft = ref('')
+const soldAction = ref('delete') // cosa fare dell'annuncio su Vinted
+const SOLD_ACTIONS = [
+  { value: 'none', label: "Non modificare l'annuncio", help: 'Resta su Vinted così com\'è (es. venduto proprio su Vinted).' },
+  { value: 'hide', label: "Nascondi l'annuncio", help: 'Non più visibile né acquistabile; si può rimostrare dal sito.' },
+  { value: 'delete', label: "Elimina l'annuncio", help: 'Rimosso definitivamente da Vinted (non si può annullare).' },
+]
+const LISTING_ACTION_TEXT = { none: 'annuncio non modificato', hide: 'annuncio nascosto', delete: 'annuncio eliminato' }
 const soldInvalid = computed(() => Number.isNaN(parsePrice(soldDraft.value)))
 const soldPriceDraft = ref('')
 const soldPriceDirty = computed(
@@ -160,7 +167,9 @@ const setHidden = (hidden) =>
   })
 
 function openSold() {
+  actionError.value = ''
   soldDraft.value = priceText(book.value.price)
+  soldAction.value = 'delete'
   soldModal.value = true
 }
 
@@ -170,7 +179,7 @@ const markSold = () =>
     listingMessage.value = ''
     book.value = await api(`/api/admin/books/${props.id}/mark-sold`, {
       method: 'POST',
-      body: { sold_price: parsePrice(soldDraft.value) },
+      body: { sold_price: parsePrice(soldDraft.value), listing_action: soldAction.value },
     })
     soldPriceDraft.value = priceText(book.value.sold_price)
     soldModal.value = false
@@ -481,10 +490,16 @@ onBeforeUnmount(() => clearInterval(timer))
                 <div class="d-flex flex-wrap align-items-center gap-1">
                   <span class="badge me-1" :class="listing.cls"><i class="bi me-1" :class="listing.icon"></i>{{ listing.label }}</span>
                   <span class="text-secondary">pubblicato {{ fmtRelative(book.vinted_draft.published_at) }} · </span>
-                  <a :href="book.vinted_draft.item_url" target="_blank" rel="noopener">
+                  <a
+                    v-if="!(book.sold_manual && book.vinted_draft.listing_action === 'delete')"
+                    :href="book.vinted_draft.item_url"
+                    target="_blank"
+                    rel="noopener"
+                  >
                     <i class="bi bi-box-arrow-up-right me-1"></i>vedi l'annuncio
                   </a>
                   <button
+                    v-if="!book.sold_manual"
                     class="btn btn-sm btn-link py-0"
                     :disabled="busy"
                     title="Legge stato e prezzo dall'annuncio su Vinted"
@@ -497,6 +512,10 @@ onBeforeUnmount(() => clearInterval(timer))
                 <div v-if="book.phase === 9" class="mt-2">
                   <div class="text-secondary mb-1">
                     Venduto {{ book.sold_at ? fmtDate(book.sold_at) : '' }} · prezzo dell'annuncio {{ fmtPrice(book.price, 'EUR') }}
+                    <template v-if="book.sold_manual">
+                      · segnato a mano, {{ LISTING_ACTION_TEXT[book.vinted_draft.listing_action] || 'annuncio non modificato' }}
+                      (non si sincronizza più con Vinted)
+                    </template>
                   </div>
                   <div class="input-group input-group-sm" style="max-width: 18rem">
                     <span class="input-group-text">Incassato</span>
@@ -635,18 +654,29 @@ onBeforeUnmount(() => clearInterval(timer))
 
       <BaseModal v-if="soldModal" title="Segna come venduto" @close="soldModal = false">
         <p class="small text-secondary">
-          Il libro passa a "Venduto". Su Vinted non cambia nulla: la vendita la gestisce Vinted. Inserisci la cifra
+          Il libro passa a "Venduto" e da quel momento non viene più aggiornato da Vinted. Inserisci la cifra
           effettivamente incassata (proposta: il prezzo dell'annuncio).
         </p>
-        <div class="input-group" style="max-width: 14rem">
-          <input v-model="soldDraft" class="form-control" inputmode="decimal" placeholder="es. 6,50" @keyup.enter="markSold" />
+        <label class="form-label fw-semibold small" for="sold-price">Incassato</label>
+        <div class="input-group mb-1" style="max-width: 14rem">
+          <input id="sold-price" v-model="soldDraft" class="form-control" inputmode="decimal" placeholder="es. 6,50" />
           <span class="input-group-text">€</span>
         </div>
-        <div v-if="soldInvalid" class="small text-danger mt-1">Importo non valido</div>
+        <div v-if="soldInvalid" class="small text-danger">Importo non valido</div>
+        <div class="form-label fw-semibold small mt-3">Annuncio su Vinted</div>
+        <div v-for="a in SOLD_ACTIONS" :key="a.value" class="form-check mb-1">
+          <input :id="`sold-${a.value}`" v-model="soldAction" class="form-check-input" type="radio" :value="a.value" />
+          <label class="form-check-label small" :for="`sold-${a.value}`">
+            <span class="fw-semibold">{{ a.label }}</span>
+            <span class="d-block text-secondary">{{ a.help }}</span>
+          </label>
+        </div>
+        <div v-if="actionError" class="alert alert-danger small py-2 mt-3 mb-0">{{ actionError }}</div>
         <template #footer>
           <button class="btn btn-light" @click="soldModal = false">Annulla</button>
           <button class="btn btn-dark" :disabled="busy || soldInvalid" @click="markSold">
-            <i class="bi bi-bag-check me-1"></i>Segna come venduto
+            <span v-if="busy" class="spinner-border spinner-border-sm me-1"></span>
+            <i v-else class="bi bi-bag-check me-1"></i>{{ soldAction === 'delete' ? 'Segna venduto ed elimina' : 'Segna come venduto' }}
           </button>
         </template>
       </BaseModal>

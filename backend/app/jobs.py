@@ -153,7 +153,15 @@ def _sync_page(listings: list[dict[str, Any]]) -> tuple[int, list[str]]:
     by_id = {li["id"]: li for li in listings if li.get("id")}
     updated, notes = 0, []
     with SessionLocal() as db:
-        books = db.query(Book).filter(Book.phase.in_(LISTING_PHASE_NUMBERS), Book.vinted_draft.is_not(None)).all()
+        books = (
+            db.query(Book)
+            .filter(
+                Book.phase.in_(LISTING_PHASE_NUMBERS),
+                Book.vinted_draft.is_not(None),
+                Book.sold_manual.is_not(True),  # venduti segnati a mano: non si sincronizzano
+            )
+            .all()
+        )
         for book in books:
             listing = by_id.get(item_id(book))
             if listing is None:

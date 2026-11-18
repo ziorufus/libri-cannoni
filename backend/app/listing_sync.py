@@ -31,6 +31,8 @@ def _eur(value: float | None) -> str:
 def apply_listing(db: Session, book: Book, listing: dict[str, Any], worker: str) -> list[str]:
     """Applica stato e prezzo dell'annuncio al libro; restituisce le modifiche fatte
     (vuoto se era già allineato) e, se ce ne sono, le registra nello storico. Non fa commit."""
+    if book.sold_manual:
+        return []  # venduto segnato a mano: vale quello, non lo stato su Vinted
     changes: list[str] = []
     state = listing.get("state")
     if state is None:
