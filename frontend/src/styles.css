@@ -39,6 +39,18 @@ a { color: var(--lc-red); }
 .navbar-lc { background: var(--lc-red); }
 .navbar-lc .navbar-brand, .navbar-lc .nav-link { color: #fff; }
 .navbar-lc .nav-link:hover, .navbar-lc .nav-link.router-link-active { color: #ffd9de; }
+/* Mobile: titolo completo sulla prima riga, indicatori + hamburger sulla seconda */
+@media (max-width: 767.98px) {
+  .navbar-lc .navbar-brand {
+    width: 100%;
+    margin-right: 0;
+    white-space: normal;
+    font-size: 1.1rem;
+    line-height: 1.25;
+  }
+  .navbar-lc .job-indicators { margin-top: .25rem; }
+  .navbar-lc .navbar-toggler { margin-top: .25rem; }
+}
 
 .font-serif { font-family: Georgia, 'Times New Roman', serif; }
 
