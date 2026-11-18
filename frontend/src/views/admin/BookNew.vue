@@ -47,7 +47,7 @@ function stopCamera() {
   warmingUp.value = false
 }
 
-// Su Chrome/Android il primo takePhoto() di uno stream riconfigura la pipeline
+// Il primo takePhoto() di uno stream (visto su iPhone/WebKit) riconfigura la pipeline
 // della fotocamera: l'anteprima si blocca e riparte (sembra un primo scatto) e
 // solo dopo arriva la foto vera. Si fa quindi uno scatto "a vuoto" subito dopo
 // l'accensione, così il primo scatto dell'utente è immediato.
