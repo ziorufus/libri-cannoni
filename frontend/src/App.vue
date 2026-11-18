@@ -1,13 +1,33 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { auth, logout } from './auth'
 import JobIndicators from './components/JobIndicators.vue'
 
 const open = ref(false)
+const userOpen = ref(false)
+const userMenu = ref(null)
 const route = useRoute()
 const router = useRouter()
-watch(() => route.fullPath, () => (open.value = false))
+watch(() => route.fullPath, () => {
+  open.value = false
+  userOpen.value = false
+})
+
+function onDocClick(e) {
+  if (userOpen.value && userMenu.value && !userMenu.value.contains(e.target)) userOpen.value = false
+}
+function onKey(e) {
+  if (e.key === 'Escape') userOpen.value = false
+}
+onMounted(() => {
+  document.addEventListener('click', onDocClick)
+  document.addEventListener('keydown', onKey)
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('click', onDocClick)
+  document.removeEventListener('keydown', onKey)
+})
 
 function doLogout() {
   logout()
@@ -29,13 +49,27 @@ function doLogout() {
       <div class="collapse navbar-collapse" :class="{ show: open }">
         <ul class="navbar-nav ms-auto align-items-md-center">
           <li v-if="auth.user" class="nav-item">
-            <RouterLink class="nav-link" to="/area">Area riservata</RouterLink>
+            <RouterLink class="nav-link text-nowrap" to="/area">Area riservata</RouterLink>
           </li>
           <li v-if="auth.user?.role === 'admin'" class="nav-item">
-            <RouterLink class="nav-link" to="/admin">Amministrazione</RouterLink>
+            <RouterLink class="nav-link text-nowrap" to="/admin">Amministrazione</RouterLink>
           </li>
           <li v-if="auth.user" class="nav-item d-flex align-items-center gap-2 ms-md-3 py-2 py-md-0">
-            <span class="text-white-50 small text-truncate" style="max-width: 14rem">{{ auth.user.email }}</span>
+            <div ref="userMenu" class="position-relative">
+              <button
+                class="btn btn-sm btn-outline-light user-btn"
+                type="button"
+                aria-label="Utente"
+                :aria-expanded="userOpen"
+                @click="userOpen = !userOpen"
+              >
+                <i class="bi bi-person-fill"></i>
+              </button>
+              <div v-if="userOpen" class="dropdown-menu show user-popup shadow">
+                <div class="px-3 py-1 small text-muted">Accesso come</div>
+                <div class="px-3 pb-1 text-break">{{ auth.user.email }}</div>
+              </div>
+            </div>
             <button class="btn btn-sm btn-outline-light" @click="doLogout">
               <i class="bi bi-box-arrow-right"></i> Esci
             </button>
