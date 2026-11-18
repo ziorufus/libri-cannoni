@@ -47,6 +47,24 @@ function fmtPrice(amount, currency) {
   }
 }
 
+// Annuncio uscito dall'approvazione: fasi 6-9, cambiate solo dalle azioni qui sotto
+const LISTING = {
+  6: { label: 'Pubblicato', cls: 'text-bg-success', icon: 'bi-check-circle' },
+  7: { label: 'Nascosto', cls: 'text-bg-secondary', icon: 'bi-eye-slash' },
+  8: { label: 'Riservato', cls: 'text-bg-warning', icon: 'bi-bookmark-check' },
+  9: { label: 'Venduto', cls: 'text-bg-dark', icon: 'bi-bag-check' },
+}
+const listing = computed(() => LISTING[book.value?.phase] || null)
+const movablePhases = computed(() => meta.phases.filter((p) => !LISTING[p.number]))
+const listingMessage = ref('')
+const soldModal = ref(false)
+const soldDraft = ref('')
+const soldInvalid = computed(() => Number.isNaN(parsePrice(soldDraft.value)))
+const soldPriceDraft = ref('')
+const soldPriceDirty = computed(
+  () => book.value && !Object.is(parsePrice(soldPriceDraft.value), book.value.sold_price ?? null),
+)
+
 const lightbox = ref(null) // indice della foto aperta
 const confirmDelete = ref(false)
 const confirmDeleteDraft = ref(false)
@@ -68,6 +86,7 @@ async function load() {
     if (!keepName) nameDraft.value = b.description || ''
     if (!keepNotes) notesDraft.value = b.notes
     if (!keepPrice) priceDraft.value = priceText(b.price)
+    if (first || !soldPriceDirty.value) soldPriceDraft.value = priceText(b.sold_price)
     if (first || b.phase !== prevPhase) targetPhase.value = b.phase
     prevPhase = b.phase
     error.value = ''
@@ -122,6 +141,47 @@ const deleteDraft = () =>
     } finally {
       confirmDeleteDraft.value = false
     }
+  })
+
+const refreshListing = () =>
+  act(async () => {
+    listingMessage.value = ''
+    const { message, ...b } = await api(`/api/admin/books/${props.id}/vinted-refresh`, { method: 'POST' })
+    book.value = b
+    priceDraft.value = priceText(b.price)
+    soldPriceDraft.value = priceText(b.sold_price)
+    listingMessage.value = message
+  })
+
+const setHidden = (hidden) =>
+  act(async () => {
+    listingMessage.value = ''
+    book.value = await api(`/api/admin/books/${props.id}/vinted-${hidden ? 'hide' : 'unhide'}`, { method: 'POST' })
+  })
+
+function openSold() {
+  soldDraft.value = priceText(book.value.price)
+  soldModal.value = true
+}
+
+const markSold = () =>
+  act(async () => {
+    if (soldInvalid.value) throw new Error('Prezzo non valido: scrivi un importo come 6,50')
+    listingMessage.value = ''
+    book.value = await api(`/api/admin/books/${props.id}/mark-sold`, {
+      method: 'POST',
+      body: { sold_price: parsePrice(soldDraft.value) },
+    })
+    soldPriceDraft.value = priceText(book.value.sold_price)
+    soldModal.value = false
+  })
+
+const saveSoldPrice = () =>
+  act(async () => {
+    const value = parsePrice(soldPriceDraft.value)
+    if (Number.isNaN(value)) throw new Error('Prezzo non valido: scrivi un importo come 6,50 (o lascia vuoto)')
+    book.value = await api(`/api/admin/books/${props.id}`, { method: 'PATCH', body: { sold_price: value } })
+    soldPriceDraft.value = priceText(book.value.sold_price)
   })
 
 const forcePhase = () =>
@@ -257,9 +317,9 @@ onBeforeUnmount(() => clearInterval(timer))
             <button v-if="book.can_force" class="btn btn-sm btn-outline-primary" :disabled="busy" @click="forcePhase">
               <i class="bi bi-fast-forward me-1"></i>Esegui comunque
             </button>
-            <div class="input-group input-group-sm w-auto">
+            <div v-if="!listing" class="input-group input-group-sm w-auto">
               <select v-model="targetPhase" class="form-select" aria-label="Fase">
-                <option v-for="p in meta.phases" :key="p.number" :value="p.number">
+                <option v-for="p in movablePhases" :key="p.number" :value="p.number">
                   {{ p.number }} · {{ p.label }}
                 </option>
               </select>
@@ -417,12 +477,51 @@ onBeforeUnmount(() => clearInterval(timer))
             </a>
             <span class="text-secondary"> · creata {{ fmtRelative(book.vinted_draft.created_at) }}</span>
             <div class="mt-1">
-              <template v-if="book.vinted_draft.published_at">
-                <span class="badge text-bg-success me-1"><i class="bi bi-check-circle me-1"></i>Pubblicato</span>
-                <span class="text-secondary">{{ fmtRelative(book.vinted_draft.published_at) }} · </span>
-                <a :href="book.vinted_draft.item_url" target="_blank" rel="noopener">
-                  <i class="bi bi-box-arrow-up-right me-1"></i>vedi l'annuncio
-                </a>
+              <template v-if="listing">
+                <div class="d-flex flex-wrap align-items-center gap-1">
+                  <span class="badge me-1" :class="listing.cls"><i class="bi me-1" :class="listing.icon"></i>{{ listing.label }}</span>
+                  <span class="text-secondary">pubblicato {{ fmtRelative(book.vinted_draft.published_at) }} · </span>
+                  <a :href="book.vinted_draft.item_url" target="_blank" rel="noopener">
+                    <i class="bi bi-box-arrow-up-right me-1"></i>vedi l'annuncio
+                  </a>
+                  <button
+                    class="btn btn-sm btn-link py-0"
+                    :disabled="busy"
+                    title="Legge stato e prezzo dall'annuncio su Vinted"
+                    @click="refreshListing"
+                  >
+                    <i class="bi bi-arrow-repeat me-1"></i>Aggiorna
+                  </button>
+                </div>
+                <div v-if="listingMessage" class="alert alert-info py-1 px-2 small mt-2 mb-0">{{ listingMessage }}</div>
+                <div v-if="book.phase === 9" class="mt-2">
+                  <div class="text-secondary mb-1">
+                    Venduto {{ book.sold_at ? fmtDate(book.sold_at) : '' }} · prezzo dell'annuncio {{ fmtPrice(book.price, 'EUR') }}
+                  </div>
+                  <div class="input-group input-group-sm" style="max-width: 18rem">
+                    <span class="input-group-text">Incassato</span>
+                    <input
+                      v-model="soldPriceDraft"
+                      class="form-control"
+                      inputmode="decimal"
+                      placeholder="—"
+                      @keyup.enter="soldPriceDirty && saveSoldPrice()"
+                    />
+                    <span class="input-group-text">€</span>
+                    <button class="btn btn-primary" :disabled="busy || !soldPriceDirty" @click="saveSoldPrice">Salva</button>
+                  </div>
+                </div>
+                <div v-if="book.status !== 'running'" class="d-flex flex-wrap gap-2 mt-2">
+                  <button v-if="book.phase === 6" class="btn btn-sm btn-outline-secondary" :disabled="busy" @click="setHidden(true)">
+                    <i class="bi bi-eye-slash me-1"></i>Nascondi
+                  </button>
+                  <button v-if="book.phase === 7" class="btn btn-sm btn-outline-success" :disabled="busy" @click="setHidden(false)">
+                    <i class="bi bi-eye me-1"></i>Mostra di nuovo
+                  </button>
+                  <button v-if="book.phase >= 6 && book.phase <= 8" class="btn btn-sm btn-outline-dark" :disabled="busy" @click="openSold">
+                    <i class="bi bi-bag-check me-1"></i>Segna come venduto
+                  </button>
+                </div>
               </template>
               <template v-else-if="book.vinted_draft.publish_requested_at">
                 <span class="badge text-bg-info me-1"><i class="bi bi-hourglass-split me-1"></i>In approvazione</span>
@@ -531,6 +630,24 @@ onBeforeUnmount(() => clearInterval(timer))
           </a>
           <button class="btn btn-sm btn-light" @click="step(-1)"><i class="bi bi-chevron-left"></i></button>
           <button class="btn btn-sm btn-light" @click="step(1)"><i class="bi bi-chevron-right"></i></button>
+        </template>
+      </BaseModal>
+
+      <BaseModal v-if="soldModal" title="Segna come venduto" @close="soldModal = false">
+        <p class="small text-secondary">
+          Il libro passa a "Venduto". Su Vinted non cambia nulla: la vendita la gestisce Vinted. Inserisci la cifra
+          effettivamente incassata (proposta: il prezzo dell'annuncio).
+        </p>
+        <div class="input-group" style="max-width: 14rem">
+          <input v-model="soldDraft" class="form-control" inputmode="decimal" placeholder="es. 6,50" @keyup.enter="markSold" />
+          <span class="input-group-text">€</span>
+        </div>
+        <div v-if="soldInvalid" class="small text-danger mt-1">Importo non valido</div>
+        <template #footer>
+          <button class="btn btn-light" @click="soldModal = false">Annulla</button>
+          <button class="btn btn-dark" :disabled="busy || soldInvalid" @click="markSold">
+            <i class="bi bi-bag-check me-1"></i>Segna come venduto
+          </button>
         </template>
       </BaseModal>
 

@@ -424,11 +424,19 @@ PHASES: dict[int, Phase] = {
             check_publication,
             min_gap_default=5,
         ),
-        Phase(6, "Pubblicato", "Annuncio pubblicato su Vinted."),
+        Phase(6, "Pubblicato", "Annuncio pubblicato e visibile su Vinted."),
+        Phase(7, "Nascosto", "Annuncio nascosto su Vinted (\"Mostra di nuovo\" lo rende visibile)."),
+        Phase(8, "Riservato", "Annuncio riservato su Vinted: venduto, in attesa di conclusione."),
+        Phase(9, "Venduto", "Libro venduto."),
     ]
 }
 
 ACTIVE_PHASES = [n for n, p in PHASES.items() if p.handler is not None]
+
+# Fasi di un annuncio uscito dall'approvazione: si cambiano solo con le azioni
+# su Vinted (nascondi/mostra, venduto) o con "Aggiorna" (lettura del guardaroba)
+LISTING_PHASES = {"live": 6, "hidden": 7, "reserved": 8, "sold": 9}
+LISTING_PHASE_NUMBERS = frozenset(LISTING_PHASES.values())
 
 
 def min_gap_key(phase: int) -> str:

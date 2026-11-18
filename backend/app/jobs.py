@@ -18,9 +18,12 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from .config import config
-from .db import utcnow
-from .models import JobState
+from .db import SessionLocal, utcnow
+from .listing_sync import apply_listing, item_id
+from .models import Book, JobState
+from .phases import LISTING_PHASE_NUMBERS
 from .vinted_auth import auth_status
+from .vinted_listing import PER_PAGE, wardrobe_page
 from .vinted_search import VintedOpError
 
 log = logging.getLogger(__name__)
@@ -142,6 +145,42 @@ async def check_claude_usage(settings: dict[str, Any], previous: dict[str, Any])
     return JobResult(True, msg, data)
 
 
+# --- Guardaroba Vinted ------------------------------------------------------------
+
+def _sync_page(listings: list[dict[str, Any]]) -> tuple[int, list[str]]:
+    """Applica una pagina del guardaroba ai libri pubblicati (fasi 6-9)."""
+    by_id = {li["id"]: li for li in listings if li.get("id")}
+    updated, notes = 0, []
+    with SessionLocal() as db:
+        books = db.query(Book).filter(Book.phase.in_(LISTING_PHASE_NUMBERS), Book.vinted_draft.is_not(None)).all()
+        for book in books:
+            listing = by_id.get(item_id(book))
+            if listing is None:
+                continue
+            if changes := apply_listing(db, book, listing, "guardaroba Vinted (job)"):
+                updated += 1
+                notes.append(f"#{book.id}: " + ", ".join(changes))
+        db.commit()
+    return updated, notes
+
+
+async def sync_wardrobe(settings: dict[str, Any], previous: dict[str, Any]) -> JobResult:
+    # Una pagina per giro; dopo l'ultima (meno di PER_PAGE annunci) si ricomincia dalla prima
+    page = max(1, int(previous.get("next_page") or 1))
+    keep = {"next_page": page}
+    try:
+        listings = await asyncio.to_thread(wardrobe_page, page)
+    except VintedOpError as exc:
+        return JobResult(False, str(exc), keep)
+    updated, notes = await asyncio.to_thread(_sync_page, listings)
+    last = len(listings) < PER_PAGE
+    data = {"next_page": 1 if last else page + 1, "page": page, "items": len(listings), "updated": updated}
+    msg = f"Pagina {page}{' (ultima)' if last else ''}: {len(listings)} annunci, {updated} libri aggiornati"
+    if notes:
+        msg += "\n" + "\n".join(notes)
+    return JobResult(True, msg, data)
+
+
 # --- Registro -----------------------------------------------------------------
 
 JOBS: dict[str, Job] = {
@@ -163,6 +202,15 @@ JOBS: dict[str, Job] = {
             "l'analisi di Claude, che riparte quando l'uso scende sotto i margini.",
             check_claude_usage,
             interval_default=5,
+        ),
+        Job(
+            "vinted_wardrobe",
+            "Guardaroba Vinted",
+            f"Legge una pagina del guardaroba ({PER_PAGE} annunci) a ogni giro, ricominciando dalla "
+            "prima dopo l'ultima, e aggiorna stato (pubblicato, nascosto, riservato, venduto) e "
+            "prezzo dei libri pubblicati.",
+            sync_wardrobe,
+            interval_default=15,
         ),
     ]
 }

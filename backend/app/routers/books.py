@@ -1,5 +1,6 @@
 """Gestione libri (solo amministratori) e distribuzione delle foto."""
 
+import asyncio
 import json
 from typing import Annotated
 
@@ -12,10 +13,21 @@ from sqlalchemy.orm import Session, selectinload
 from ..claude_json import book_condition, book_isbn, book_name
 from ..db import get_db, utcnow
 from ..models import BOOK_CONDITIONS, Book, PhaseRun, Photo
-from ..phases import PHASES, PUBLISH_PHASE, initial_status, pause_key, suggested_price, unmet_requirements
+from ..listing_sync import _eur as eur, apply_listing, item_id, move_to_listing_phase
+from ..phases import (
+    LISTING_PHASE_NUMBERS,
+    LISTING_PHASES,
+    PHASES,
+    PUBLISH_PHASE,
+    initial_status,
+    pause_key,
+    suggested_price,
+    unmet_requirements,
+)
 from ..security import CurrentUser, require_admin
 from ..settings_store import get_setting, paused_phases
 from ..vinted_draft import delete_draft
+from ..vinted_listing import find_listing, set_hidden
 from ..vinted_search import VintedOpError
 from ..worker import apply_pauses, load_settings
 from ..storage import (
@@ -58,6 +70,8 @@ def _book_summary(b: Book) -> dict:
         "condition": b.condition,
         "condition_manual": bool(b.condition_manual),
         "price": b.price,
+        "sold_price": b.sold_price,
+        "sold_at": b.sold_at,
         "notes": b.notes,
         "created_by": b.created_by,
         "created_at": b.created_at,
@@ -257,6 +271,8 @@ class BookUpdate(BaseModel):
     claude_output: str | None = None
     # In euro. Conta solo se presente nella richiesta: null svuota il campo
     price: float | None = Field(default=None, ge=0, le=100000)
+    # Cifra incassata (solo libri venduti); null svuota il campo
+    sold_price: float | None = Field(default=None, ge=0, le=100000)
 
 
 def _name_from_output(db: Session, output: str | None) -> str | None:
@@ -293,6 +309,10 @@ def update_book(
         book.description = body.description.strip() or None
     if "price" in body.model_fields_set:
         book.price = None if body.price is None else round(body.price, 2)
+    if "sold_price" in body.model_fields_set:
+        if book.phase != LISTING_PHASES["sold"]:
+            raise HTTPException(400, "Il prezzo di vendita si imposta solo per i libri venduti")
+        book.sold_price = None if body.sold_price is None else round(body.sold_price, 2)
     if body.condition is not None:
         book.condition = _check_condition(body.condition)
         book.condition_manual = book.condition is not None
@@ -442,6 +462,96 @@ def delete_vinted_draft(book_id: int, db: Session = Depends(get_db), cu: Current
     return _book_detail(_load(db, book_id), db)
 
 
+# --- annuncio pubblicato: azioni su Vinted e aggiornamento dal guardaroba ----------
+
+def _listed_book(db: Session, book_id: int, allowed: set[int]) -> tuple[Book, int]:
+    book = _load(db, book_id)
+    if book.phase not in allowed:
+        labels = ", ".join(PHASES[n].label for n in sorted(allowed))
+        raise HTTPException(400, f"Azione possibile solo nelle fasi: {labels}")
+    if book.status == "running":
+        raise HTTPException(409, "Il libro è in lavorazione")
+    iid = item_id(book)
+    if iid is None:
+        raise HTTPException(400, "Il libro non ha un annuncio su Vinted")
+    return book, iid
+
+
+def _manual_run(db: Session, book: Book, cu: CurrentUser, output: str) -> None:
+    db.add(
+        PhaseRun(
+            book_id=book.id,
+            phase=book.phase,
+            attempt=0,
+            worker=f"azione manuale ({cu.email})",
+            started_at=utcnow(),
+            finished_at=utcnow(),
+            success=True,
+            output=output,
+        )
+    )
+
+
+@router.post("/books/{book_id}/vinted-refresh")
+async def vinted_refresh(book_id: int, db: Session = Depends(get_db), cu: CurrentUser = Depends(require_admin)):
+    """Legge l'annuncio dal guardaroba di Vinted e allinea fase e prezzo del libro."""
+    book, iid = _listed_book(db, book_id, set(LISTING_PHASE_NUMBERS))
+    try:
+        listing = await asyncio.to_thread(find_listing, iid)
+    except VintedOpError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    if listing is None:
+        message = f"Annuncio {iid} non trovato nel guardaroba di Vinted (cancellato?): nessuna modifica"
+    else:
+        changes = apply_listing(db, book, listing, f"Aggiorna ({cu.email})")
+        message = "Aggiornato: " + ", ".join(changes) if changes else "Già allineato a Vinted"
+        db.commit()
+        db.expire_all()
+    return {**_book_detail(_load(db, book_id), db), "message": message}
+
+
+async def _hide(db: Session, book_id: int, cu: CurrentUser, hidden: bool) -> dict:
+    src, dst = ("live", "hidden") if hidden else ("hidden", "live")
+    book, iid = _listed_book(db, book_id, {LISTING_PHASES[src]})
+    try:
+        await asyncio.to_thread(set_hidden, iid, hidden)  # prima Vinted: se fallisce il libro resta com'era
+    except VintedOpError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    move_to_listing_phase(book, LISTING_PHASES[dst])
+    _manual_run(db, book, cu, f"Annuncio {iid} {'nascosto' if hidden else 'di nuovo visibile'} su Vinted")
+    db.commit()
+    db.expire_all()
+    return _book_detail(_load(db, book_id), db)
+
+
+@router.post("/books/{book_id}/vinted-hide")
+async def vinted_hide(book_id: int, db: Session = Depends(get_db), cu: CurrentUser = Depends(require_admin)):
+    return await _hide(db, book_id, cu, True)
+
+
+@router.post("/books/{book_id}/vinted-unhide")
+async def vinted_unhide(book_id: int, db: Session = Depends(get_db), cu: CurrentUser = Depends(require_admin)):
+    return await _hide(db, book_id, cu, False)
+
+
+class SoldIn(BaseModel):
+    sold_price: float | None = Field(default=None, ge=0, le=100000)
+
+
+@router.post("/books/{book_id}/mark-sold")
+def mark_sold(book_id: int, body: SoldIn, db: Session = Depends(get_db), cu: CurrentUser = Depends(require_admin)):
+    """Segna il libro come venduto (senza chiamare Vinted) con la cifra incassata."""
+    allowed = {LISTING_PHASES[s] for s in ("live", "hidden", "reserved")}
+    book, _iid = _listed_book(db, book_id, allowed)
+    book.sold_price = round(body.sold_price, 2) if body.sold_price is not None else book.price
+    book.sold_at = utcnow()
+    move_to_listing_phase(book, LISTING_PHASES["sold"])
+    _manual_run(db, book, cu, f"Segnato come venduto a {eur(book.sold_price)}")
+    db.commit()
+    db.expire_all()
+    return _book_detail(_load(db, book_id), db)
+
+
 class PhaseReset(BaseModel):
     phase: int
 
@@ -458,6 +568,12 @@ def set_phase(
     if body.phase not in PHASES:
         raise HTTPException(400, "Fase inesistente")
     book = _load(db, book_id)
+    if book.phase in LISTING_PHASE_NUMBERS or body.phase in LISTING_PHASE_NUMBERS:
+        raise HTTPException(
+            400,
+            "Le fasi Pubblicato, Nascosto, Riservato e Venduto si cambiano solo con le azioni "
+            "sull'annuncio (Nascondi, Mostra di nuovo, Segna come venduto, Aggiorna)",
+        )
     book.phase = body.phase
     book.status = initial_status(body.phase)
     book.attempts = 0

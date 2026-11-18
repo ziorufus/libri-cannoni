@@ -73,6 +73,9 @@ class Book(Base):
     vinted_prices: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Bozza creata su Vinted (JSON: id, link di modifica, dati inviati)
     vinted_draft: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Vendita (fase "Venduto"): cifra incassata e data; price resta il prezzo dell'annuncio
+    sold_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sold_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
     photos: Mapped[list["Photo"]] = relationship(
         back_populates="book",

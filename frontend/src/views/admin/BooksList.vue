@@ -109,6 +109,9 @@ onBeforeUnmount(() => clearInterval(timer))
             <span v-if="b.price !== null" class="badge rounded-pill text-bg-light border fw-normal">
               {{ b.price.toLocaleString('it-IT', { style: 'currency', currency: 'EUR' }) }}
             </span>
+            <span v-if="b.sold_price !== null" class="badge rounded-pill text-bg-dark fw-normal" title="Incassato">
+              <i class="bi bi-bag-check me-1"></i>{{ b.sold_price.toLocaleString('it-IT', { style: 'currency', currency: 'EUR' }) }}
+            </span>
           </div>
           <div v-if="b.status === 'waiting' && b.next_attempt_at" class="small text-secondary">
             Nuovo tentativo {{ fmtRelative(b.next_attempt_at) }}

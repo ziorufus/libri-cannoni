@@ -60,7 +60,16 @@ sui libri falliti: non serve riavviare il backend.
 | 3 | Bozza Vinted | crea la bozza su Vinted (equivalente di `vinted draft ... --no-move`) e la salva in `books.vinted_draft`. Richiede il prezzo; **in pausa** per impostazione predefinita |
 | 4 | Pubblicazione | chiede a Vinted di pubblicare la bozza (equivalente di `vinted publish ID`). **In pausa** per impostazione predefinita |
 | 5 | Approvazione Vinted | ogni N minuti (impostazione, default 2) legge l'annuncio come `vinted item ID`: il 404 vuol dire "ancora in approvazione". Se Vinted lo pubblica si passa alla fase 6; se lo riporta in bozza il libro torna **fermo** alla fase 4 (dopo eventuali correzioni sul sito: "Esegui la fase"). Dopo il numero massimo di controlli (default 20) il libro va in "Fallito": "Riprova" ricomincia i controlli senza ripubblicare |
-| 6 | Pubblicato | nessuna azione |
+| 6 | Pubblicato | annuncio visibile. "Nascondi" esegue `vinted hide` e passa alla 7 |
+| 7 | Nascosto | "Mostra di nuovo" esegue `vinted unhide` e torna alla 6 |
+| 8 | Riservato | rilevato da "Aggiorna" o dal job del guardaroba |
+| 9 | Venduto | da "Segna come venduto" (con la cifra incassata, `books.sold_price`) o rilevato da Vinted |
+
+Le fasi 6–9 non hanno elaborazioni automatiche e non si cambiano con "Sposta a fase":
+si passa dalle azioni nella sezione "Annuncio su Vinted" della scheda. "Aggiorna" legge
+l'annuncio dal **guardaroba** di Vinted (l'unica fonte che riporta nascosto, riservato e
+venduto: per un venduto `vinted item` risponde 404) e allinea fase e prezzo. Il job
+"Guardaroba Vinted" fa lo stesso per tutti i libri, una pagina (96 annunci) a ogni giro.
 
 In caso di errore: attesa e nuovo tentativo; dopo N tentativi il libro va in
 "fallito" (riprovabile dall'interfaccia). Gli errori nei dati (es. categoria non
@@ -93,6 +102,7 @@ task separato dalle fasi. Ognuno si attiva/disattiva e ha il suo intervallo in
 |---|---|---|
 | Sessione Vinted | ogni 50 min (5 min se non valida) | `vinted auth status`, che rinnova anche i token. Se la sessione non è valida mette in **pausa automatica** le fasi 2–5; ripartono da sole quando torna valida (anche subito dopo un import da Admin → Vinted) |
 | Uso di Claude | ogni 5 min | `claude -p /usage`: percentuali di sessione e settimana, mostrate nella barra in alto. Se una delle due supera la soglia (default 80%) mette in pausa automatica la fase 1; riparte quando entrambe sono sotto i margini (default 70%) |
+| Guardaroba Vinted | ogni 15 min | legge una pagina del guardaroba a ogni giro (dopo l'ultima ricomincia dalla prima) e aggiorna stato e prezzo dei libri nelle fasi 6–9 |
 
 Le pause automatiche si sommano a quelle manuali: una fase messa in pausa a mano
 resta in pausa anche quando la condizione del job rientra.
