@@ -21,6 +21,8 @@ const resolution = ref('')
 const flash = ref(false)
 const capturing = ref(false)
 let imageCapture = null
+let warmUp = null // Promise dello scatto a vuoto iniziale (vedi warmUpImageCapture)
+const warmingUp = ref(false)
 
 const photos = ref([]) // { key, blob, thumb, width, height }
 const notes = ref('')
@@ -41,6 +43,24 @@ function stopCamera() {
   stream.value?.getTracks().forEach((t) => t.stop())
   stream.value = null
   imageCapture = null
+  warmUp = null
+  warmingUp.value = false
+}
+
+// Su Chrome/Android il primo takePhoto() di uno stream riconfigura la pipeline
+// della fotocamera: l'anteprima si blocca e riparte (sembra un primo scatto) e
+// solo dopo arriva la foto vera. Si fa quindi uno scatto "a vuoto" subito dopo
+// l'accensione, così il primo scatto dell'utente è immediato.
+async function warmUpImageCapture(ic) {
+  warmingUp.value = true
+  try {
+    await ic.takePhoto()
+  } catch {
+    // takePhoto() non supportato: si userà sempre il fotogramma video
+    if (imageCapture === ic) imageCapture = null
+  } finally {
+    if (imageCapture === ic || !imageCapture) warmingUp.value = false
+  }
 }
 
 async function startCamera() {
@@ -72,6 +92,7 @@ async function startCamera() {
     resolution.value = settings.width ? `${settings.width}×${settings.height}` : ''
     if (!deviceId.value) deviceId.value = settings.deviceId || ''
     imageCapture = 'ImageCapture' in window ? new window.ImageCapture(track) : null
+    if (imageCapture) warmUp = warmUpImageCapture(imageCapture)
     // Le etichette dei dispositivi sono disponibili solo dopo il permesso
     const all = await navigator.mediaDevices.enumerateDevices()
     devices.value = all.filter((d) => d.kind === 'videoinput')
@@ -154,8 +175,9 @@ async function addPhoto(blob) {
 }
 
 async function capture() {
-  if (!stream.value || capturing.value) return
+  if (!stream.value || capturing.value || warmingUp.value) return
   capturing.value = true
+  await warmUp
   flash.value = true
   setTimeout(() => (flash.value = false), 150)
   navigator.vibrate?.(30)
@@ -292,11 +314,12 @@ onBeforeRouteLeave(() => {
 
       <button
         class="btn btn-primary shutter"
-        :disabled="!stream || capturing"
+        :disabled="!stream || capturing || warmingUp"
         aria-label="Scatta foto"
         @click="capture"
       >
-        <i class="bi bi-camera-fill"></i>
+        <span v-if="warmingUp" class="spinner-border spinner-border-sm"></span>
+        <i v-else class="bi bi-camera-fill"></i>
       </button>
 
       <label class="btn btn-sm btn-light text-nowrap" style="width: 40%; max-width: 10rem">
