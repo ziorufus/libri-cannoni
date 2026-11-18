@@ -47,6 +47,18 @@ scade, reimportare i token dalla pagina **Admin → Vinted** (incollando il "Cop
 cURL", equivale a `vinted auth import`) oppure da terminale, poi premere "Riprova"
 sui libri falliti: non serve riavviare il backend.
 
+**Uso di Claude.** L'analisi (`claude -p`) usa `CLAUDE_CODE_OAUTH_TOKEN`; per
+leggere l'uso dell'abbonamento serve invece un token OAuth con scope `user:profile`,
+in un file JSON indicato da `CLAUDE_JSON_FILE` nel `backend/.env`, nel formato delle
+credenziali di Claude Code:
+
+```json
+{"claudeAiOauth":{"accessToken":"...","refreshToken":"...","expiresAt":1795045134809,"scopes":["user:profile","..."]}}
+```
+
+Il backend rinnova il token ogni 6 ore (job "Token Claude") e riscrive il file:
+l'utente di uvicorn deve poter scrivere nel file e nella sua cartella.
+
 **Foto.** Il libro 57 ha le sue foto originali in `$BOOKS_DIR/57/01.jpg, 02.jpg, …`
 (in ordine di scatto). Le miniature stanno in `$BOOKS_DIR/.thumbs/57/`.
 
@@ -101,7 +113,8 @@ task separato dalle fasi. Ognuno si attiva/disattiva e ha il suo intervallo in
 | Job | Default | Cosa fa |
 |---|---|---|
 | Sessione Vinted | ogni 50 min (5 min se non valida) | `vinted auth status`, che rinnova anche i token. Se la sessione non è valida mette in **pausa automatica** le fasi 2–5; ripartono da sole quando torna valida (anche subito dopo un import da Admin → Vinted) |
-| Uso di Claude | ogni 5 min | `claude -p /usage`: percentuali di sessione e settimana, mostrate nella barra in alto. Se una delle due supera la soglia (default 80%) mette in pausa automatica la fase 1; riparte quando entrambe sono sotto i margini (default 70%) |
+| Uso di Claude | ogni 5 min | `GET https://api.anthropic.com/api/oauth/usage` con il token di `CLAUDE_JSON_FILE` (rinnovato prima se scaduto): percentuali di sessione e settimana, mostrate nella barra in alto. Se una delle due supera la soglia (default 80%) mette in pausa automatica la fase 1; riparte quando entrambe sono sotto i margini (default 70%) |
+| Token Claude | ogni 6 ore | rinnova il token OAuth di `CLAUDE_JSON_FILE` e riscrive il file |
 | Guardaroba Vinted | ogni 15 min | legge una pagina del guardaroba a ogni giro (dopo l'ultima ricomincia dalla prima) e aggiorna stato e prezzo dei libri nelle fasi 6–9 |
 
 Le pause automatiche si sommano a quelle manuali: una fase messa in pausa a mano

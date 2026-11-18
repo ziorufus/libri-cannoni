@@ -10,14 +10,12 @@ alcune fasi (pause che si sommano a quelle manuali, che restano prioritarie):
 import asyncio
 import json
 import logging
-import os
-import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-from .config import config
+from .claude_oauth import ClaudeOAuthError, fetch_usage, refresh
 from .db import SessionLocal, utcnow
 from .listing_sync import apply_listing, item_id
 from .models import Book, JobState
@@ -69,19 +67,30 @@ async def check_vinted_session(settings: dict[str, Any], previous: dict[str, Any
 
 # --- Uso di Claude --------------------------------------------------------------
 
-_SESSION = re.compile(r"Current session:\s*(\d+(?:\.\d+)?)%\s*used(?:\s*·\s*resets\s+(.+))?", re.I)
-_WEEK = re.compile(r"Current week \(all models\):\s*(\d+(?:\.\d+)?)%\s*used(?:\s*·\s*resets\s+(.+))?", re.I)
+def _resets(value: Any) -> str:
+    """Data di reset ISO 8601 -> testo locale (es. "18/11 21:39")."""
+    if not isinstance(value, str) or not value:
+        return ""
+    try:
+        return datetime.fromisoformat(value).astimezone().strftime("%d/%m %H:%M")
+    except ValueError:
+        return value
 
 
-def parse_usage(text: str) -> dict[str, Any] | None:
-    s, w = _SESSION.search(text), _WEEK.search(text)
-    if not s or not w:
+def parse_usage(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Percentuali di sessione (5 ore) e settimana da /api/oauth/usage."""
+    s, w = payload.get("five_hour"), payload.get("seven_day")
+    if not isinstance(s, dict) or not isinstance(w, dict):
+        return None
+    try:
+        session, week = float(s["utilization"]), float(w["utilization"])
+    except (KeyError, TypeError, ValueError):
         return None
     return {
-        "session": float(s[1]),
-        "session_resets": (s[2] or "").strip(),
-        "week": float(w[1]),
-        "week_resets": (w[2] or "").strip(),
+        "session": session,
+        "session_resets": _resets(s.get("resets_at")),
+        "week": week,
+        "week_resets": _resets(w.get("resets_at")),
     }
 
 
@@ -93,31 +102,14 @@ def _over(value: float, was_over: bool, pause_at: int, resume_below: int) -> boo
 async def check_claude_usage(settings: dict[str, Any], previous: dict[str, Any]) -> JobResult:
     # Se la lettura fallisce si mantiene la decisione precedente (pausa o no)
     keep = {k: previous[k] for k in ("session_over", "week_over", "paused", "reason") if k in previous}
-    if not config.claude_code_oauth_token:
-        return JobResult(False, "CLAUDE_CODE_OAUTH_TOKEN non impostato nel backend", keep)
-    env = {**os.environ, "CLAUDE_CODE_OAUTH_TOKEN": config.claude_code_oauth_token}
     try:
-        proc = await asyncio.create_subprocess_exec(
-            config.claude_bin, "-p", "/usage",
-            cwd=config.books_dir,
-            env=env,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-    except OSError as exc:
-        return JobResult(False, f"Impossibile avviare {config.claude_bin}: {exc}", keep)
-    try:
-        out, err = await asyncio.wait_for(proc.communicate(), 120)
-    except TimeoutError:
-        proc.kill()
-        await proc.wait()
-        return JobResult(False, "claude -p /usage: nessuna risposta dopo 120 secondi", keep)
-    text = out.decode(errors="replace")
-    usage = parse_usage(text)
+        payload = await fetch_usage()
+    except ClaudeOAuthError as exc:
+        return JobResult(False, str(exc), keep)
+    usage = parse_usage(payload)
     if usage is None:
-        raw = (text + "\n" + err.decode(errors="replace")).strip()[:2000]
-        return JobResult(False, f"Formato di /usage non riconosciuto:\n{raw}", keep)
+        raw = json.dumps(payload, ensure_ascii=False)[:2000]
+        return JobResult(False, f"Formato della risposta di /api/oauth/usage non riconosciuto:\n{raw}", keep)
 
     session_over = _over(
         usage["session"], previous.get("session_over", False),
@@ -143,6 +135,15 @@ async def check_claude_usage(settings: dict[str, Any], previous: dict[str, Any])
     if data["paused"]:
         msg += " — analisi in pausa"
     return JobResult(True, msg, data)
+
+
+# --- Token Claude --------------------------------------------------------------
+
+async def refresh_claude_token(settings: dict[str, Any], previous: dict[str, Any]) -> JobResult:
+    try:
+        return JobResult(True, await refresh())
+    except ClaudeOAuthError as exc:
+        return JobResult(False, str(exc))
 
 
 # --- Guardaroba Vinted ------------------------------------------------------------
@@ -198,10 +199,19 @@ JOBS: dict[str, Job] = {
         Job(
             "claude_usage",
             "Uso di Claude",
-            "Legge l'uso dell'abbonamento (claude -p /usage). Oltre le soglie mette in pausa "
+            "Legge l'uso dell'abbonamento (api.anthropic.com/api/oauth/usage, con il token di "
+            "CLAUDE_JSON_FILE). Oltre le soglie mette in pausa "
             "l'analisi di Claude, che riparte quando l'uso scende sotto i margini.",
             check_claude_usage,
             interval_default=5,
+        ),
+        Job(
+            "claude_token",
+            "Token Claude",
+            "Rinnova il token OAuth dell'abbonamento in CLAUDE_JSON_FILE (usato per leggere "
+            "l'uso di Claude) e riscrive il file con i nuovi token.",
+            refresh_claude_token,
+            interval_default=360,
         ),
         Job(
             "vinted_wardrobe",

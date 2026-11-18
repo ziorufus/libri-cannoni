@@ -24,6 +24,9 @@ class Config(BaseSettings):
     # Claude Code
     claude_code_oauth_token: str = ""
     claude_bin: str = "claude"
+    # File JSON con il token OAuth dell'abbonamento ({"claudeAiOauth": {...}}),
+    # usato per leggere l'uso e rinnovato dal job "Token Claude"
+    claude_json_file: str = ""
 
     # Vinted (pacchetto vinted-lister): file con i token di sessione, scritto da
     # `vinted auth import` e aggiornato a ogni refresh. Vuoto = $VINTED_ENV_FILE
