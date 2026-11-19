@@ -40,16 +40,15 @@ onMounted(async () => {
 
 <template>
   <main>
-    <section class="py-5 border-bottom bg-white">
-      <div class="container py-md-4" style="max-width: 46rem">
+    <section class="py-4 border-bottom bg-white">
+      <div class="container py-md-4" style="max-width: 50rem">
         <p class="text-uppercase small fw-semibold text-secondary mb-2">
-          Libri in cambio di un'offerta per Emergency
+          Salviamo libri, salviamo vite.
         </p>
         <h1 class="display-5 font-serif mb-3">Mettete dei libri nei vostri cannoni</h1>
         <p class="lead text-secondary mb-4">
-          Il titolo si rifà a <em>Mettete dei fiori nei vostri cannoni</em>, l'inno pacifista dei Giganti
-          (1967). Qui i libri che ho deciso di cedere trovano una nuova casa: in cambio chiedo
-          soltanto un'offerta per <a href="https://www.emergency.it" target="_blank" rel="noopener">Emergency</a>,
+          In questo sito trovate i libri che ho deciso di cedere in cambio di
+          un'offerta per <a href="https://www.emergency.it" target="_blank" rel="noopener">Emergency</a>,
           l'associazione fondata da Gino Strada.
         </p>
       </div>
