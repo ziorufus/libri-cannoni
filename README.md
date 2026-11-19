@@ -76,6 +76,7 @@ l'utente di uvicorn deve poter scrivere nel file e nella sua cartella.
 | 7 | Nascosto | "Mostra di nuovo" esegue `vinted unhide` e torna alla 6 |
 | 8 | Riservato | rilevato da "Aggiorna" o dal job del guardaroba |
 | 9 | Venduto | da "Segna come venduto" (con la cifra incassata, `books.sold_price`) o rilevato da Vinted |
+| 10 | Versato | il ricavato è in un versamento a Emergency (pagina **Admin → Versamenti**); eliminando il versamento torna alla 9 |
 
 Le fasi 6–9 non hanno elaborazioni automatiche e non si cambiano con "Sposta a fase":
 si passa dalle azioni nella sezione "Annuncio su Vinted" della scheda. "Aggiorna" legge
@@ -102,6 +103,18 @@ più worker non lavorano mai sullo stesso libro.
 
 Per aggiungere una fase: scrivere un handler in [backend/app/phases.py](backend/app/phases.py)
 e registrarlo in `PHASES`.
+
+### Versamenti a Emergency
+
+Dall'elenco dei libri si selezionano i venduti (fase 9) e si preme **Nuovo versamento**:
+data, cifra (proposta: la somma degli incassi), descrizione facoltativa e ricevuta del
+bonifico (immagine, salvata in `BOOKS_DIR/.donations/`). I libri passano alla fase 10.
+Le tabelle `donations` e `donation_books` si creano da sole all'avvio.
+
+La homepage pubblica mostra, senza login, i libri venduti in attesa di versamento
+("Prossimo versamento") e i versamenti con ricevuta e libri compresi
+(`GET /api/public/donations`). **La ricevuta è pubblica**: va caricata già oscurata
+(IBAN, nomi, indirizzi).
 
 ### Job periodici
 

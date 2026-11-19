@@ -125,3 +125,34 @@ def check_signature(photo_id: int, size: str, exp: int, sig: str) -> bool:
     if exp < time.time():
         return False
     return hmac.compare_digest(_signature(photo_id, size, exp), sig)
+
+
+# --- Ricevute dei versamenti: <BOOKS_DIR>/.donations/<id>.jpg e <id>-thumb.jpg ---------
+
+RECEIPT_MAX_SIDE = 2400
+
+
+def donations_dir() -> Path:
+    return config.books_dir / ".donations"
+
+
+def receipt_path(donation_id: int, size: str) -> Path:
+    return donations_dir() / (f"{donation_id}-thumb.jpg" if size == "thumb" else f"{donation_id}.jpg")
+
+
+def save_receipt(donation_id: int, data: bytes) -> None:
+    """Salva la ricevuta (JPEG, lato lungo al massimo RECEIPT_MAX_SIDE) e la miniatura."""
+    inspect_image(data, 1)
+    folder = donations_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    with Image.open(io.BytesIO(data)) as img:
+        img = ImageOps.exif_transpose(img).convert("RGB")
+        img.thumbnail((RECEIPT_MAX_SIDE, RECEIPT_MAX_SIDE), Image.Resampling.LANCZOS)
+        img.save(receipt_path(donation_id, "full"), "JPEG", quality=88, optimize=True)
+        img.thumbnail(THUMB_SIZE)
+        img.save(receipt_path(donation_id, "thumb"), "JPEG", quality=80)
+
+
+def delete_receipt(donation_id: int) -> None:
+    for size in ("full", "thumb"):
+        receipt_path(donation_id, size).unlink(missing_ok=True)

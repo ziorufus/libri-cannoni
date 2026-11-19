@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base, UTCDateTime, utcnow
@@ -144,3 +144,32 @@ class JobState(Base):
     ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     message: Mapped[str] = mapped_column(Text, default="")
     data: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON specifico del job
+
+
+class Donation(Base):
+    """Versamento a Emergency, con la ricevuta del bonifico (immagine pubblica)."""
+
+    __tablename__ = "donations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    date: Mapped[date] = mapped_column(Date)
+    amount: Mapped[float] = mapped_column(Float)
+    description: Mapped[str] = mapped_column(Text, default="")
+    receipt_filename: Mapped[str] = mapped_column(String(100), default="")  # in BOOKS_DIR/.donations/
+    created_by: Mapped[str] = mapped_column(String(320), default="")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+    links: Mapped[list["DonationBook"]] = relationship(back_populates="donation", cascade="all, delete-orphan")
+
+
+class DonationBook(Base):
+    """Libri compresi in un versamento: ogni libro sta in un solo versamento."""
+
+    __tablename__ = "donation_books"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    donation_id: Mapped[int] = mapped_column(ForeignKey("donations.id", ondelete="CASCADE"), index=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), unique=True)
+
+    donation: Mapped[Donation] = relationship(back_populates="links")
+    book: Mapped["Book"] = relationship()

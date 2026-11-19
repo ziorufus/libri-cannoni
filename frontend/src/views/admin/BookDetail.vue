@@ -53,6 +53,7 @@ const LISTING = {
   7: { label: 'Nascosto', cls: 'text-bg-secondary', icon: 'bi-eye-slash' },
   8: { label: 'Riservato', cls: 'text-bg-warning', icon: 'bi-bookmark-check' },
   9: { label: 'Venduto', cls: 'text-bg-dark', icon: 'bi-bag-check' },
+  10: { label: 'Versato', cls: 'text-bg-danger', icon: 'bi-heart-fill' },
 }
 const listing = computed(() => LISTING[book.value?.phase] || null)
 const movablePhases = computed(() => meta.phases.filter((p) => !LISTING[p.number]))
@@ -499,7 +500,7 @@ onBeforeUnmount(() => clearInterval(timer))
                     <i class="bi bi-box-arrow-up-right me-1"></i>vedi l'annuncio
                   </a>
                   <button
-                    v-if="!book.sold_manual"
+                    v-if="!book.sold_manual && book.phase <= 9"
                     class="btn btn-sm btn-link py-0"
                     :disabled="busy"
                     title="Legge stato e prezzo dall'annuncio su Vinted"
@@ -509,7 +510,12 @@ onBeforeUnmount(() => clearInterval(timer))
                   </button>
                 </div>
                 <div v-if="listingMessage" class="alert alert-info py-1 px-2 small mt-2 mb-0">{{ listingMessage }}</div>
-                <div v-if="book.phase === 9" class="mt-2">
+                <div v-if="book.donation" class="mt-2">
+                  <i class="bi bi-heart-fill text-danger me-1"></i>Versato a Emergency con il
+                  <RouterLink :to="{ name: 'donations' }">versamento del {{ new Date(book.donation.date + 'T12:00:00').toLocaleDateString('it-IT') }}</RouterLink>
+                  ({{ fmtPrice(book.donation.amount, 'EUR') }})
+                </div>
+                <div v-if="book.phase >= 9" class="mt-2">
                   <div class="text-secondary mb-1">
                     Venduto {{ book.sold_at ? fmtDate(book.sold_at) : '' }} · prezzo dell'annuncio {{ fmtPrice(book.price, 'EUR') }}
                     <template v-if="!book.sold_manual && book.vinted_draft.sold_price_source">
@@ -520,7 +526,8 @@ onBeforeUnmount(() => clearInterval(timer))
                       (non si sincronizza più con Vinted)
                     </template>
                   </div>
-                  <div class="input-group input-group-sm" style="max-width: 18rem">
+                  <div v-if="book.phase === 10" class="small">Incassato <strong>{{ fmtPrice(book.sold_price, 'EUR') }}</strong></div>
+                  <div v-else class="input-group input-group-sm" style="max-width: 18rem">
                     <span class="input-group-text">Incassato</span>
                     <input
                       v-model="soldPriceDraft"

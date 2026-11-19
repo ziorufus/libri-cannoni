@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from ..claude_json import book_condition, book_isbn, book_name
 from ..db import get_db, utcnow
-from ..models import BOOK_CONDITIONS, Book, PhaseRun, Photo
+from ..models import BOOK_CONDITIONS, Book, Donation, DonationBook, PhaseRun, Photo
 from ..listing_sync import (
     _eur as eur,
     apply_listing,
@@ -24,6 +24,7 @@ from ..listing_sync import (
 from ..phases import (
     LISTING_PHASE_NUMBERS,
     LISTING_PHASES,
+    MANUAL_ONLY_PHASES,
     PHASES,
     PUBLISH_PHASE,
     initial_status,
@@ -123,6 +124,11 @@ def _blocks(b: Book, settings: dict) -> tuple[list[dict], bool]:
     return blocks, paused and not forced and not any(b["kind"] == "requirement" for b in blocks)
 
 
+def _donation_of(db: Session, book_id: int) -> dict | None:
+    d = db.scalar(select(Donation).join(DonationBook).where(DonationBook.book_id == book_id))
+    return None if d is None else {"id": d.id, "date": d.date.isoformat(), "amount": d.amount}
+
+
 def _book_detail(b: Book, db: Session) -> dict:
     settings = load_settings(db)
     blocks, can_force = _blocks(b, settings)
@@ -137,6 +143,7 @@ def _book_detail(b: Book, db: Session) -> dict:
         "isbn": book_isbn(b.claude_output, get_setting(db, "json_isbn_key")),
         "vinted_prices": _json_column(b.vinted_prices),
         "vinted_draft": _json_column(b.vinted_draft),
+        "donation": _donation_of(db, b.id),
         "photos": [_photo_out(p) for p in b.photos],
         "runs": [
             {
@@ -375,6 +382,8 @@ def condition_from_output(book_id: int, db: Session = Depends(get_db), _: Curren
 @router.delete("/books/{book_id}", status_code=204)
 def delete_book(book_id: int, db: Session = Depends(get_db), _: CurrentUser = Depends(require_admin)):
     book = _load(db, book_id)
+    if db.scalar(select(DonationBook.donation_id).where(DonationBook.book_id == book_id)):
+        raise HTTPException(400, "Il libro fa parte di un versamento: elimina prima il versamento")
     db.delete(book)
     db.commit()
     delete_book_files(book_id)
@@ -611,11 +620,12 @@ def set_phase(
     if body.phase not in PHASES:
         raise HTTPException(400, "Fase inesistente")
     book = _load(db, book_id)
-    if book.phase in LISTING_PHASE_NUMBERS or body.phase in LISTING_PHASE_NUMBERS:
+    if book.phase in MANUAL_ONLY_PHASES or body.phase in MANUAL_ONLY_PHASES:
         raise HTTPException(
             400,
             "Le fasi Pubblicato, Nascosto, Riservato e Venduto si cambiano solo con le azioni "
-            "sull'annuncio (Nascondi, Mostra di nuovo, Segna come venduto, Aggiorna)",
+            "sull'annuncio (Nascondi, Mostra di nuovo, Segna come venduto, Aggiorna); "
+            "la fase Versato dalla pagina Versamenti",
         )
     book.phase = body.phase
     book.status = initial_status(body.phase)

@@ -14,6 +14,11 @@ onMounted(() => loadMeta().catch(() => {}))
         </RouterLink>
       </li>
       <li class="nav-item">
+        <RouterLink class="nav-link text-nowrap" :to="{ name: 'donations' }" active-class="active">
+          <i class="bi bi-heart me-1"></i>Versamenti
+        </RouterLink>
+      </li>
+      <li class="nav-item">
         <RouterLink class="nav-link text-nowrap" :to="{ name: 'access' }" active-class="active">
           <i class="bi bi-people me-1"></i>Accessi
         </RouterLink>

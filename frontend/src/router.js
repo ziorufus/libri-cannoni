@@ -34,6 +34,7 @@ const routes = [
         component: () => import('./views/admin/BookDetail.vue'),
         props: (r) => ({ id: Number(r.params.id) }),
       },
+      { path: 'versamenti', name: 'donations', component: () => import('./views/admin/DonationsView.vue') },
       { path: 'accessi', name: 'access', component: () => import('./views/admin/AccessView.vue') },
       { path: 'job', name: 'jobs', component: () => import('./views/admin/JobsView.vue') },
       { path: 'vinted', name: 'vinted', component: () => import('./views/admin/VintedView.vue') },

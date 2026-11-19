@@ -428,6 +428,7 @@ PHASES: dict[int, Phase] = {
         Phase(7, "Nascosto", "Annuncio nascosto su Vinted (\"Mostra di nuovo\" lo rende visibile)."),
         Phase(8, "Riservato", "Annuncio riservato su Vinted: venduto, in attesa di conclusione."),
         Phase(9, "Venduto", "Libro venduto."),
+        Phase(10, "Versato", "Ricavato versato a Emergency (vedi Versamenti)."),
     ]
 }
 
@@ -437,6 +438,11 @@ ACTIVE_PHASES = [n for n, p in PHASES.items() if p.handler is not None]
 # su Vinted (nascondi/mostra, venduto) o con "Aggiorna" (lettura del guardaroba)
 LISTING_PHASES = {"live": 6, "hidden": 7, "reserved": 8, "sold": 9}
 LISTING_PHASE_NUMBERS = frozenset(LISTING_PHASES.values())
+
+# Ricavato versato a Emergency: si entra e si esce solo dalla pagina Versamenti
+SOLD_PHASE = LISTING_PHASES["sold"]
+DONATED_PHASE = 10
+MANUAL_ONLY_PHASES = LISTING_PHASE_NUMBERS | {DONATED_PHASE}
 
 
 def min_gap_key(phase: int) -> str:
