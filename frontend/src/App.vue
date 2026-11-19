@@ -83,4 +83,20 @@ function doLogout() {
   </nav>
 
   <RouterView />
+
+  <footer class="site-footer mt-auto py-4 border-top small text-secondary text-center">
+    <div class="container" style="max-width: 50rem">
+      <p class="mb-1">
+        Questo è un sito personale, fatto col
+        <i class="bi bi-heart-fill text-danger-emphasis" role="img" aria-label="cuore"></i>
+        (e un po' di
+        <i class="bi bi-robot" role="img" aria-label="intelligenza artificiale"></i>)
+        da Alessio Palmero Aprosio.
+      </p>
+      <p class="mb-0">
+        I libri mi sono stati regalati. Il ricavato viene interamente versato a Emergency, senza trattenute.
+        Il sito non è affiliato a Emergency.
+      </p>
+    </div>
+  </footer>
 </template>
