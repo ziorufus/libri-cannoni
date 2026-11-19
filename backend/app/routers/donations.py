@@ -19,7 +19,7 @@ from ..db import get_db, utcnow
 from ..models import Book, Donation, DonationBook, PhaseRun
 from ..phases import DONATED_PHASE, SOLD_PHASE
 from ..security import CurrentUser, require_admin
-from ..storage import InvalidPhoto, delete_receipt, receipt_path, save_receipt, signed_photo_url
+from ..storage import InvalidPhoto, delete_receipt, receipt_path, save_receipt, thumb_path
 
 router = APIRouter(prefix="/api/admin/donations", tags=["donations"])
 public_router = APIRouter(prefix="/api/public", tags=["public"])
@@ -43,8 +43,20 @@ def public_book(b: Book) -> dict:
         "title": b.description or "Libro senza titolo",
         "sold_price": b.sold_price,
         "sold_at": b.sold_at.date().isoformat() if b.sold_at else None,
-        "cover_url": signed_photo_url(b.photos[0].id, "thumb") if b.photos else None,
+        "cover_url": _cover_url(b),
     }
+
+
+# Copertine dei libri venduti/versati: già pubbliche nella homepage, quindi con un
+# indirizzo fisso, senza firma né scadenza (le altre foto restano private, vedi
+# storage.signed_photo_url). `?v=` cambia se cambia la prima foto (cache del browser).
+PUBLIC_COVER_PHASES = (SOLD_PHASE, DONATED_PHASE)
+
+
+def _cover_url(b: Book) -> str | None:
+    if not b.photos or b.phase not in PUBLIC_COVER_PHASES:
+        return None
+    return f"{config.backend_url.rstrip('/')}/api/public/books/{b.id}/cover?v={b.photos[0].id}"
 
 
 def _receipt_url(d: Donation, size: str) -> str | None:
@@ -109,6 +121,18 @@ def public_receipt(donation_id: int, size: str, db: Session = Depends(get_db)):
     d = db.get(Donation, donation_id)
     path = receipt_path(donation_id, size)
     if d is None or not d.receipt_filename or not path.is_file():
+        raise HTTPException(404)
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+
+
+@public_router.get("/books/{book_id}/cover")
+def public_cover(book_id: int, db: Session = Depends(get_db)):
+    """Miniatura della prima foto, solo per i libri venduti o versati (404 per gli altri)."""
+    book = db.get(Book, book_id)
+    if book is None or book.phase not in PUBLIC_COVER_PHASES or not book.photos:
+        raise HTTPException(404)
+    path = thumb_path(book.id, book.photos[0].filename)
+    if not path.is_file():
         raise HTTPException(404)
     return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
 
