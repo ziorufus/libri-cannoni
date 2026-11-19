@@ -85,7 +85,7 @@ function doLogout() {
   <RouterView />
 
   <footer class="site-footer mt-auto py-4 border-top small text-secondary text-center">
-    <div class="container" style="max-width: 50rem">
+    <div class="container">
       <p class="mb-1">
         Questo è un sito personale, fatto col
         <i class="bi bi-heart-fill text-danger-emphasis" role="img" aria-label="cuore"></i>
