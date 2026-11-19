@@ -180,6 +180,10 @@ onBeforeUnmount(() => clearInterval(timer))
         >
           <input class="form-check-input m-0 pe-none" type="checkbox" :checked="isSelected(b.id)" tabindex="-1" />
         </span>
+        <span v-else class="select-box invisible" aria-hidden="true">
+          <!-- Segnaposto invisibile: tiene allineate le miniature di tutti i libri -->
+          <input class="form-check-input m-0" type="checkbox" disabled tabindex="-1" />
+        </span>
         <img v-if="b.cover_url" :src="b.cover_url" class="thumb" loading="lazy" alt="" />
         <div v-else class="thumb d-flex align-items-center justify-content-center text-secondary">
           <i class="bi bi-image"></i>
