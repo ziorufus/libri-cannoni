@@ -21,6 +21,32 @@ def item_id(book: Book) -> int | None:
     return int(value) if value else None
 
 
+def _draft(book: Book) -> dict[str, Any]:
+    try:
+        draft = json.loads(book.vinted_draft) if book.vinted_draft else {}
+    except ValueError:
+        return {}
+    return draft if isinstance(draft, dict) else {}
+
+
+def set_sold_price_source(book: Book, source: str | None) -> None:
+    """Da dove viene il prezzo di vendita: "order" (ordine Vinted, offerta compresa),
+    "listing" (prezzo dell'annuncio, provvisorio), "manual" (corretto a mano)."""
+    draft = _draft(book)
+    draft["sold_price_source"] = source
+    book.vinted_draft = json.dumps(draft, ensure_ascii=False)
+
+
+def needs_sale_price(book: Book, listing: dict[str, Any] | None) -> bool:
+    """Venduto su Vinted di cui non si conosce ancora l'importo effettivo."""
+    return (
+        listing is not None
+        and listing.get("state") == "sold"
+        and not book.sold_manual
+        and _draft(book).get("sold_price_source") not in ("order", "manual")
+    )
+
+
 def _eur(value: float | None) -> str:
     if value is None:
         return "—"
@@ -28,9 +54,12 @@ def _eur(value: float | None) -> str:
     return f"{text} €"
 
 
-def apply_listing(db: Session, book: Book, listing: dict[str, Any], worker: str) -> list[str]:
+def apply_listing(
+    db: Session, book: Book, listing: dict[str, Any], worker: str, sale_price: float | None = None
+) -> list[str]:
     """Applica stato e prezzo dell'annuncio al libro; restituisce le modifiche fatte
-    (vuoto se era già allineato) e, se ce ne sono, le registra nello storico. Non fa commit."""
+    (vuoto se era già allineato) e, se ce ne sono, le registra nello storico. Non fa commit.
+    `sale_price`: importo effettivo dall'ordine Vinted, se trovato (vedi sale_prices)."""
     if book.sold_manual:
         return []  # venduto segnato a mano: vale quello, non lo stato su Vinted
     changes: list[str] = []
@@ -48,17 +77,29 @@ def apply_listing(db: Session, book: Book, listing: dict[str, Any], worker: str)
         old = PHASES[book.phase].label if book.phase in PHASES else f"fase {book.phase}"
         changes.append(f"{old} → {PHASES[phase].label}")
         if phase == LISTING_PHASES["sold"]:
-            # La cifra incassata si propone uguale al prezzo dell'annuncio: si corregge a mano
             book.sold_at = book.sold_at or utcnow()
-            if book.sold_price is None:
+            if sale_price is not None:
+                book.sold_price = sale_price
+                set_sold_price_source(book, "order")
+                changes.append(f"prezzo di vendita {_eur(sale_price)} (dall'ordine Vinted)")
+            elif book.sold_price is None:
+                # Ordine non ancora trovato: provvisorio il prezzo dell'annuncio, si riprova ai giri successivi
                 book.sold_price = price if price is not None else book.price
-                changes.append(f"prezzo di vendita proposto {_eur(book.sold_price)}")
+                set_sold_price_source(book, "listing")
+                changes.append(f"prezzo di vendita provvisorio {_eur(book.sold_price)} (prezzo dell'annuncio)")
         elif book.phase == LISTING_PHASES["sold"]:
             # Vendita annullata su Vinted
             changes.append(f"vendita annullata (prezzo di vendita {_eur(book.sold_price)} tolto)")
             book.sold_price = None
             book.sold_at = None
+            set_sold_price_source(book, None)
         move_to_listing_phase(book, phase)
+    elif phase == LISTING_PHASES["sold"] and sale_price is not None and needs_sale_price(book, listing):
+        # Già venduto con il prezzo provvisorio: arriva l'importo dell'ordine
+        if sale_price != book.sold_price:
+            changes.append(f"prezzo di vendita {_eur(book.sold_price)} → {_eur(sale_price)} (dall'ordine Vinted)")
+            book.sold_price = sale_price
+        set_sold_price_source(book, "order")
 
     if changes:
         db.add(

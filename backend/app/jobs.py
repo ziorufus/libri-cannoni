@@ -17,11 +17,11 @@ from typing import Any
 
 from .claude_oauth import ClaudeOAuthError, fetch_usage, refresh
 from .db import SessionLocal, utcnow
-from .listing_sync import apply_listing, item_id
+from .listing_sync import apply_listing, item_id, needs_sale_price
 from .models import Book, JobState
 from .phases import LISTING_PHASE_NUMBERS
 from .vinted_auth import auth_status
-from .vinted_listing import PER_PAGE, wardrobe_page
+from .vinted_listing import PER_PAGE, sale_prices, wardrobe_page
 from .vinted_search import VintedOpError
 
 log = logging.getLogger(__name__)
@@ -148,25 +148,39 @@ async def refresh_claude_token(settings: dict[str, Any], previous: dict[str, Any
 
 # --- Guardaroba Vinted ------------------------------------------------------------
 
-def _sync_page(listings: list[dict[str, Any]]) -> tuple[int, list[str]]:
+def _synced_books(db) -> list[Book]:
+    return (
+        db.query(Book)
+        .filter(
+            Book.phase.in_(LISTING_PHASE_NUMBERS),
+            Book.vinted_draft.is_not(None),
+            Book.sold_manual.is_not(True),  # venduti segnati a mano: non si sincronizzano
+        )
+        .all()
+    )
+
+
+def _sold_without_price(listings: list[dict[str, Any]]) -> set[int]:
+    """Annunci della pagina venduti su Vinted di cui serve l'importo effettivo."""
+    by_id = {li["id"]: li for li in listings if li.get("id")}
+    with SessionLocal() as db:
+        return {
+            iid for book in _synced_books(db)
+            if (iid := item_id(book)) is not None and needs_sale_price(book, by_id.get(iid))
+        }
+
+
+def _sync_page(listings: list[dict[str, Any]], prices: dict[int, float]) -> tuple[int, list[str]]:
     """Applica una pagina del guardaroba ai libri pubblicati (fasi 6-9)."""
     by_id = {li["id"]: li for li in listings if li.get("id")}
     updated, notes = 0, []
     with SessionLocal() as db:
-        books = (
-            db.query(Book)
-            .filter(
-                Book.phase.in_(LISTING_PHASE_NUMBERS),
-                Book.vinted_draft.is_not(None),
-                Book.sold_manual.is_not(True),  # venduti segnati a mano: non si sincronizzano
-            )
-            .all()
-        )
-        for book in books:
-            listing = by_id.get(item_id(book))
+        for book in _synced_books(db):
+            iid = item_id(book)
+            listing = by_id.get(iid)
             if listing is None:
                 continue
-            if changes := apply_listing(db, book, listing, "guardaroba Vinted (job)"):
+            if changes := apply_listing(db, book, listing, "guardaroba Vinted (job)", prices.get(iid)):
                 updated += 1
                 notes.append(f"#{book.id}: " + ", ".join(changes))
         db.commit()
@@ -181,13 +195,23 @@ async def sync_wardrobe(settings: dict[str, Any], previous: dict[str, Any]) -> J
         listings = await asyncio.to_thread(wardrobe_page, page)
     except VintedOpError as exc:
         return JobResult(False, str(exc), keep)
-    updated, notes = await asyncio.to_thread(_sync_page, listings)
+    # Venduti senza importo effettivo: lo si cerca negli ordini (offerte comprese)
+    prices: dict[int, float] = {}
+    order_note = ""
+    if wanted := await asyncio.to_thread(_sold_without_price, listings):
+        try:
+            prices = await asyncio.to_thread(sale_prices, wanted)
+        except VintedOpError as exc:
+            order_note = f"\nPrezzi di vendita non letti: {exc}"
+        if missing := wanted - prices.keys():
+            order_note += f"\nOrdine non trovato per gli annunci {', '.join(map(str, sorted(missing)))}: si riprova al prossimo giro"
+    updated, notes = await asyncio.to_thread(_sync_page, listings, prices)
     last = len(listings) < PER_PAGE
     data = {"next_page": 1 if last else page + 1, "page": page, "items": len(listings), "updated": updated}
     msg = f"Pagina {page}{' (ultima)' if last else ''}: {len(listings)} annunci, {updated} libri aggiornati"
     if notes:
         msg += "\n" + "\n".join(notes)
-    return JobResult(True, msg, data)
+    return JobResult(True, msg + order_note, data)
 
 
 # --- Registro -----------------------------------------------------------------
