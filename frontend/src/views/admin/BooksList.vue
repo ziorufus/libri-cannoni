@@ -99,7 +99,8 @@ onBeforeUnmount(() => clearInterval(timer))
             <small class="text-secondary text-nowrap">{{ fmtRelative(b.created_at) }}</small>
           </div>
           <div class="small text-truncate text-secondary">
-            {{ b.notes || 'Nessuna nota' }} · {{ b.photo_count }} foto
+            {{ b.notes || 'Nessuna nota' }} · {{ b.photo_count }} foto<template v-if="b.created_by">
+              · <i class="bi bi-person"></i> {{ b.created_by }}</template>
           </div>
           <div class="d-flex flex-wrap gap-1 align-items-center mt-1">
             <StatusBadges :book="b" />
