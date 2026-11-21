@@ -39,8 +39,27 @@ const totalSize = computed(() => photos.value.reduce((s, p) => s + p.blob.size, 
 
 // --- fotocamera --------------------------------------------------------------
 
+// Su iPhone (WebKit) la memoria dei <canvas> non viene liberata subito dal
+// garbage collector e si accumula a livello di app (non basta ricaricare la
+// pagina): ogni canvas a piena risoluzione occupa decine di MB. Azzerarne le
+// dimensioni libera subito la memoria.
+function releaseCanvas(c) {
+  c.width = 0
+  c.height = 0
+}
+
+// Codifica il canvas in JPEG e lo libera subito dopo
+async function canvasToJpeg(c, quality) {
+  try {
+    return await new Promise((resolve) => c.toBlob(resolve, 'image/jpeg', quality))
+  } finally {
+    releaseCanvas(c)
+  }
+}
+
 function stopCamera() {
   stream.value?.getTracks().forEach((t) => t.stop())
+  if (video.value) video.value.srcObject = null
   stream.value = null
   imageCapture = null
   warmUp = null
@@ -125,7 +144,7 @@ async function grabFrame() {
   canvas.width = v.videoWidth
   canvas.height = v.videoHeight
   canvas.getContext('2d').drawImage(v, 0, 0)
-  return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92))
+  return canvasToJpeg(canvas, 0.92)
 }
 
 // Decodifica una volta sola: ridimensiona al lato massimo (impostazione
@@ -154,14 +173,16 @@ async function processPhoto(blob) {
       const ctx = canvas.getContext('2d')
       ctx.imageSmoothingQuality = 'high'
       ctx.drawImage(bmp, 0, 0, width, height)
-      out = (await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9))) || blob
+      out = (await canvasToJpeg(canvas, 0.9)) || blob
     }
     const ts = Math.min(1, 240 / Math.max(width, height))
     const tc = document.createElement('canvas')
     tc.width = Math.round(bmp.width * ts * scale)
     tc.height = Math.round(bmp.height * ts * scale)
     tc.getContext('2d').drawImage(bmp, 0, 0, tc.width, tc.height)
-    return { blob: out, thumb: tc.toDataURL('image/jpeg', 0.75), width, height }
+    const thumb = tc.toDataURL('image/jpeg', 0.75)
+    releaseCanvas(tc)
+    return { blob: out, thumb, width, height }
   } finally {
     bmp.close()
   }
@@ -251,6 +272,9 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   stopCamera()
+  closePreview()
+  photos.value.forEach((p) => p.thumb.startsWith('blob:') && URL.revokeObjectURL(p.thumb))
+  photos.value = []
   window.removeEventListener('beforeunload', beforeUnload)
 })
 onBeforeRouteLeave(() => {
