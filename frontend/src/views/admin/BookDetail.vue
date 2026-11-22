@@ -47,13 +47,18 @@ function fmtPrice(amount, currency) {
   }
 }
 
-// Annuncio uscito dall'approvazione: fasi 6-9, cambiate solo dalle azioni qui sotto
+// Annuncio uscito dall'approvazione: fasi 6-11, cambiate solo dalle azioni qui sotto,
+// dagli ordini Vinted (Pagato) e dalla pagina Versamenti (Versato)
+const SOLD = 9
+const PAID = 10
+const DONATED = 11
 const LISTING = {
   6: { label: 'Pubblicato', cls: 'text-bg-success', icon: 'bi-check-circle' },
   7: { label: 'Nascosto', cls: 'text-bg-secondary', icon: 'bi-eye-slash' },
   8: { label: 'Riservato', cls: 'text-bg-warning', icon: 'bi-bookmark-check' },
-  9: { label: 'Venduto', cls: 'text-bg-dark', icon: 'bi-bag-check' },
-  10: { label: 'Versato', cls: 'text-bg-danger', icon: 'bi-heart-fill' },
+  [SOLD]: { label: 'Venduto', cls: 'text-bg-dark', icon: 'bi-bag-check' },
+  [PAID]: { label: 'Pagato', cls: 'text-bg-primary', icon: 'bi-cash-coin' },
+  [DONATED]: { label: 'Versato', cls: 'text-bg-danger', icon: 'bi-heart-fill' },
 }
 const listing = computed(() => LISTING[book.value?.phase] || null)
 const movablePhases = computed(() => meta.phases.filter((p) => !LISTING[p.number]))
@@ -184,6 +189,13 @@ const markSold = () =>
     })
     soldPriceDraft.value = priceText(book.value.sold_price)
     soldModal.value = false
+  })
+
+const markPaid = () =>
+  act(async () => {
+    if (!confirm("Segnare il libro come pagato? L'incasso risulterà arrivato da oggi.")) return
+    listingMessage.value = ''
+    book.value = await api(`/api/admin/books/${props.id}/mark-paid`, { method: 'POST' })
   })
 
 const saveSoldPrice = () =>
@@ -514,7 +526,7 @@ onBeforeUnmount(() => clearInterval(timer))
                     <i class="bi bi-box-arrow-up-right me-1"></i>vedi l'annuncio
                   </a>
                   <button
-                    v-if="!book.sold_manual && book.phase <= 9"
+                    v-if="!book.sold_manual && book.phase <= SOLD"
                     class="btn btn-sm btn-link py-0"
                     :disabled="busy"
                     title="Legge stato e prezzo dall'annuncio su Vinted"
@@ -529,7 +541,7 @@ onBeforeUnmount(() => clearInterval(timer))
                   <RouterLink :to="{ name: 'donations' }">versamento del {{ new Date(book.donation.date + 'T12:00:00').toLocaleDateString('it-IT') }}</RouterLink>
                   ({{ fmtPrice(book.donation.amount, 'EUR') }})
                 </div>
-                <div v-if="book.phase >= 9" class="mt-2">
+                <div v-if="book.phase >= SOLD" class="mt-2">
                   <div class="text-secondary mb-1">
                     Venduto {{ book.sold_at ? fmtDate(book.sold_at) : '' }} · prezzo dell'annuncio {{ fmtPrice(book.price, 'EUR') }}
                     <template v-if="!book.sold_manual && book.vinted_draft.sold_price_source === 'bundle' && book.vinted_draft.sold_bundle">
@@ -544,7 +556,19 @@ onBeforeUnmount(() => clearInterval(timer))
                       (non si sincronizza più con Vinted)
                     </template>
                   </div>
-                  <div v-if="book.phase === 10" class="small">Incassato <strong>{{ fmtPrice(book.sold_price, 'EUR') }}</strong></div>
+                  <div class="text-secondary mb-1">
+                    <template v-if="book.vinted_draft.paid_at">
+                      <i class="bi bi-cash-coin me-1"></i>Pagato {{ fmtDate(book.vinted_draft.paid_at) }}
+                      {{ book.sold_manual ? '(segnato a mano)' : "(l'acquirente ha confermato la ricezione su Vinted)" }}
+                    </template>
+                    <template v-else-if="book.phase === SOLD && book.sold_manual">
+                      In attesa del pagamento: quando arriva, usa "Segna come pagato"
+                    </template>
+                    <template v-else-if="book.phase === SOLD">
+                      In attesa che l'acquirente confermi la ricezione su Vinted (poi il libro passa da solo a Pagato)
+                    </template>
+                  </div>
+                  <div v-if="book.phase === DONATED" class="small">Incassato <strong>{{ fmtPrice(book.sold_price, 'EUR') }}</strong></div>
                   <div v-else class="input-group input-group-sm" style="max-width: 18rem">
                     <span class="input-group-text">Incassato</span>
                     <input
@@ -567,6 +591,9 @@ onBeforeUnmount(() => clearInterval(timer))
                   </button>
                   <button v-if="book.phase >= 6 && book.phase <= 8" class="btn btn-sm btn-outline-dark" :disabled="busy" @click="openSold">
                     <i class="bi bi-bag-check me-1"></i>Segna come venduto
+                  </button>
+                  <button v-if="book.phase === SOLD && book.sold_manual" class="btn btn-sm btn-outline-primary" :disabled="busy" @click="markPaid">
+                    <i class="bi bi-cash-coin me-1"></i>Segna come pagato
                   </button>
                 </div>
               </template>

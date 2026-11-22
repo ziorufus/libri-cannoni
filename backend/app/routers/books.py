@@ -18,15 +18,19 @@ from ..listing_sync import (
     apply_listing,
     item_id,
     move_to_listing_phase,
+    mark_paid,
+    needs_order,
     needs_sale_price,
     set_sold_price_source,
 )
 from ..phases import (
+    DONATABLE_PHASES,
     LISTING_PHASE_NUMBERS,
     LISTING_PHASES,
     MANUAL_ONLY_PHASES,
     PHASES,
     PUBLISH_PHASE,
+    SOLD_PHASE,
     initial_status,
     pause_key,
     suggested_price,
@@ -325,8 +329,8 @@ def update_book(
     if "price" in body.model_fields_set:
         book.price = None if body.price is None else round(body.price, 2)
     if "sold_price" in body.model_fields_set:
-        if book.phase != LISTING_PHASES["sold"]:
-            raise HTTPException(400, "Il prezzo di vendita si imposta solo per i libri venduti")
+        if book.phase not in DONATABLE_PHASES:
+            raise HTTPException(400, "Il prezzo di vendita si imposta solo per i libri venduti o pagati (non versati)")
         book.sold_price = None if body.sold_price is None else round(body.sold_price, 2)
         set_sold_price_source(book, "manual")  # non più sovrascritto dall'ordine Vinted
     if body.condition is not None:
@@ -523,15 +527,22 @@ async def vinted_refresh(book_id: int, db: Session = Depends(get_db), cu: Curren
     if listing is None:
         message = f"Annuncio {iid} non trovato nel guardaroba di Vinted (cancellato?): nessuna modifica"
     else:
-        # Venduto: l'importo effettivo (offerte comprese) è nell'ordine, non nell'annuncio
+        # Venduto: l'importo effettivo (offerte comprese) e la conferma della
+        # ricezione (fase Pagato) sono nell'ordine, non nell'annuncio
         sale, note = None, ""
-        if needs_sale_price(book, listing):
+        if needs_order(book, listing):
             try:
                 sale = (await asyncio.to_thread(sales, {iid})).get(iid)
             except VintedOpError as exc:
-                note = f" (prezzo di vendita effettivo non letto: {exc})"
+                note = f" (ordine Vinted non letto: {exc})"
             if sale is None and not note:
-                note = " (ordine non trovato: prezzo di vendita provvisorio, si riprova)"
+                note = (
+                    " (ordine non trovato: prezzo di vendita provvisorio, si riprova)"
+                    if needs_sale_price(book, listing)
+                    else " (ordine non trovato: pagamento non verificato, si riprova)"
+                )
+            elif sale is not None and not sale.completed:
+                note = " (in attesa che l'acquirente confermi la ricezione)"
         changes = apply_listing(db, book, listing, f"Aggiorna ({cu.email})", sale)
         message = ("Aggiornato: " + ", ".join(changes) if changes else "Già allineato a Vinted") + note
         db.commit()
@@ -604,6 +615,24 @@ async def mark_sold(book_id: int, body: SoldIn, db: Session = Depends(get_db), c
     return _book_detail(_load(db, book_id), db)
 
 
+@router.post("/books/{book_id}/mark-paid")
+def mark_book_paid(book_id: int, db: Session = Depends(get_db), cu: CurrentUser = Depends(require_admin)):
+    """Venduto segnato a mano: l'incasso è arrivato, il libro passa alla fase Pagato.
+    (I venduti su Vinted ci passano da soli, quando l'acquirente conferma la ricezione.)"""
+    book = _load(db, book_id)
+    if book.phase != SOLD_PHASE:
+        raise HTTPException(400, "Solo un libro venduto può essere segnato come pagato")
+    if not book.sold_manual:
+        raise HTTPException(
+            400, "Venduto su Vinted: diventa pagato da solo quando l'acquirente conferma la ricezione (prova Aggiorna)"
+        )
+    mark_paid(book)
+    _manual_run(db, book, cu, f"Segnato come pagato ({eur(book.sold_price)} incassati)")
+    db.commit()
+    db.expire_all()
+    return _book_detail(_load(db, book_id), db)
+
+
 class PhaseReset(BaseModel):
     phase: int
 
@@ -623,9 +652,9 @@ def set_phase(
     if book.phase in MANUAL_ONLY_PHASES or body.phase in MANUAL_ONLY_PHASES:
         raise HTTPException(
             400,
-            "Le fasi Pubblicato, Nascosto, Riservato e Venduto si cambiano solo con le azioni "
-            "sull'annuncio (Nascondi, Mostra di nuovo, Segna come venduto, Aggiorna); "
-            "la fase Versato dalla pagina Versamenti",
+            "Le fasi Pubblicato, Nascosto, Riservato, Venduto e Pagato si cambiano solo con le azioni "
+            "sull'annuncio (Nascondi, Mostra di nuovo, Segna come venduto, Segna come pagato, Aggiorna) "
+            "o dagli ordini Vinted; la fase Versato dalla pagina Versamenti",
         )
     book.phase = body.phase
     book.status = initial_status(body.phase)

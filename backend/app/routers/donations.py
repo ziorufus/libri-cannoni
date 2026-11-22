@@ -1,7 +1,7 @@
 """Versamenti a Emergency: gestione (admin) ed elenco pubblico per la homepage.
 
-Un versamento raccoglie libri venduti (fase 9), che passano alla fase 10
-"Versato"; eliminandolo tornano alla fase 9. La ricevuta del bonifico è
+Un versamento raccoglie libri venduti o pagati (fasi 9 e 10), che passano alla
+fase 11 "Versato"; eliminandolo tornano alla fase da cui venivano. La ricevuta del bonifico è
 un'immagine pubblica: va caricata già oscurata dove serve (IBAN, nomi, ...).
 """
 
@@ -17,7 +17,8 @@ from sqlalchemy.orm import Session, selectinload
 from ..config import config
 from ..db import get_db, utcnow
 from ..models import Book, Donation, DonationBook, PhaseRun
-from ..phases import DONATED_PHASE, SOLD_PHASE
+from ..listing_sync import paid_at
+from ..phases import DONATABLE_PHASES, DONATED_PHASE, PAID_PHASE, SOLD_PHASE, SOLD_PHASES
 from ..security import CurrentUser, require_admin
 from ..storage import InvalidPhoto, delete_receipt, receipt_path, save_receipt, thumb_path
 
@@ -47,10 +48,10 @@ def public_book(b: Book) -> dict:
     }
 
 
-# Copertine dei libri venduti/versati: già pubbliche nella homepage, quindi con un
+# Copertine dei libri venduti/pagati/versati: già pubbliche nella homepage, quindi con un
 # indirizzo fisso, senza firma né scadenza (le altre foto restano private, vedi
 # storage.signed_photo_url). `?v=` cambia se cambia la prima foto (cache del browser).
-PUBLIC_COVER_PHASES = (SOLD_PHASE, DONATED_PHASE)
+PUBLIC_COVER_PHASES = SOLD_PHASES
 
 
 def _cover_url(b: Book) -> str | None:
@@ -95,8 +96,10 @@ def _donations(db: Session) -> list[Donation]:
 
 
 def _pending_books(db: Session) -> list[Book]:
-    """Libri venduti non ancora versati."""
-    books = db.scalars(select(Book).options(selectinload(Book.photos)).where(Book.phase == SOLD_PHASE)).all()
+    """Libri venduti o pagati, non ancora versati."""
+    books = db.scalars(
+        select(Book).options(selectinload(Book.photos)).where(Book.phase.in_(DONATABLE_PHASES))
+    ).all()
     return _sort_books(list(books))
 
 
@@ -127,7 +130,7 @@ def public_receipt(donation_id: int, size: str, db: Session = Depends(get_db)):
 
 @public_router.get("/books/{book_id}/cover")
 def public_cover(book_id: int, db: Session = Depends(get_db)):
-    """Miniatura della prima foto, solo per i libri venduti o versati (404 per gli altri)."""
+    """Miniatura della prima foto, solo per i libri venduti, pagati o versati (404 per gli altri)."""
     book = db.get(Book, book_id)
     if book is None or book.phase not in PUBLIC_COVER_PHASES or not book.photos:
         raise HTTPException(404)
@@ -184,15 +187,17 @@ async def create_donation(
     db: Session = Depends(get_db),
     cu: CurrentUser = Depends(require_admin),
 ):
-    """Crea il versamento con i libri venduti indicati, che passano alla fase "Versato"."""
+    """Crea il versamento con i libri venduti o pagati indicati, che passano alla fase "Versato"."""
     ids = sorted(set(book_ids))
     if not ids:
-        raise HTTPException(400, "Seleziona almeno un libro venduto")
+        raise HTTPException(400, "Seleziona almeno un libro venduto o pagato")
     books = db.scalars(select(Book).where(Book.id.in_(ids))).all()
     if missing := set(ids) - {b.id for b in books}:
         raise HTTPException(400, f"Libri inesistenti: {', '.join(map(str, sorted(missing)))}")
-    if wrong := [b.id for b in books if b.phase != SOLD_PHASE]:
-        raise HTTPException(400, f"Solo i libri venduti (fase 9) possono essere versati: #{', #'.join(map(str, wrong))}")
+    if wrong := [b.id for b in books if b.phase not in DONATABLE_PHASES]:
+        raise HTTPException(
+            400, f"Solo i libri venduti o pagati (fasi 9 e 10) possono essere versati: #{', #'.join(map(str, wrong))}"
+        )
     if taken := db.scalars(select(DonationBook.book_id).where(DonationBook.book_id.in_(ids))).all():
         raise HTTPException(400, f"Libri già in un versamento: #{', #'.join(map(str, taken))}")
     data = await receipt.read(MAX_RECEIPT_BYTES + 1)
@@ -238,12 +243,14 @@ def update_donation(
 
 @router.delete("/{donation_id}", status_code=204)
 def delete_donation(donation_id: int, db: Session = Depends(get_db), cu: CurrentUser = Depends(require_admin)):
-    """Elimina il versamento: i suoi libri tornano alla fase 9 "Venduto"."""
+    """Elimina il versamento: i suoi libri tornano a "Pagato" (se l'incasso era
+    stato accreditato) o a "Venduto"."""
     d = _load(db, donation_id)
     label = f"{d.date.strftime('%d/%m/%Y')} ({_eur(d.amount)})"
     for link in d.links:
         if link.book.phase == DONATED_PHASE:
-            _set_phase(db, link.book, SOLD_PHASE, f"versamento ({cu.email})", f"Versamento del {label} eliminato: torna venduto")
+            back, what = (PAID_PHASE, "pagato") if paid_at(link.book) else (SOLD_PHASE, "venduto")
+            _set_phase(db, link.book, back, f"versamento ({cu.email})", f"Versamento del {label} eliminato: torna {what}")
     db.delete(d)
     db.commit()
     delete_receipt(donation_id)

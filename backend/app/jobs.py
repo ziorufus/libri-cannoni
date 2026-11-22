@@ -17,7 +17,7 @@ from typing import Any
 
 from .claude_oauth import ClaudeOAuthError, fetch_usage, refresh
 from .db import SessionLocal, utcnow
-from .listing_sync import apply_listing, item_id, needs_sale_price
+from .listing_sync import apply_listing, item_id, needs_order
 from .models import Book, JobState
 from .phases import LISTING_PHASE_NUMBERS
 from .vinted_auth import auth_status
@@ -161,12 +161,13 @@ def _synced_books(db) -> list[Book]:
 
 
 def _sold_without_price(listings: list[dict[str, Any]]) -> set[int]:
-    """Annunci della pagina venduti su Vinted di cui serve l'importo effettivo."""
+    """Annunci della pagina venduti su Vinted di cui va letto l'ordine (importo
+    effettivo, conferma della ricezione)."""
     by_id = {li["id"]: li for li in listings if li.get("id")}
     with SessionLocal() as db:
         return {
             iid for book in _synced_books(db)
-            if (iid := item_id(book)) is not None and needs_sale_price(book, by_id.get(iid))
+            if (iid := item_id(book)) is not None and needs_order(book, by_id.get(iid))
         }
 
 
@@ -195,7 +196,7 @@ async def sync_wardrobe(settings: dict[str, Any], previous: dict[str, Any]) -> J
         listings = await asyncio.to_thread(wardrobe_page, page)
     except VintedOpError as exc:
         return JobResult(False, str(exc), keep)
-    # Venduti senza importo effettivo: lo si cerca negli ordini (offerte comprese)
+    # Venduti non ancora pagati: importo effettivo (offerte comprese) e conferma negli ordini
     prices: dict[int, Any] = {}  # id annuncio -> vinted.client.Sale
     order_note = ""
     if wanted := await asyncio.to_thread(_sold_without_price, listings):

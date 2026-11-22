@@ -1,6 +1,6 @@
 <script setup>
 // Versamenti a Emergency: elenco, modifica della descrizione, eliminazione.
-// Si creano dall'elenco dei libri (selezione dei venduti → "Nuovo versamento").
+// Si creano dall'elenco dei libri (selezione dei venduti o pagati → "Nuovo versamento").
 import { onMounted, ref } from 'vue'
 import { api } from '../../api'
 import BaseModal from '../../components/BaseModal.vue'
@@ -76,10 +76,10 @@ onMounted(load)
     <div class="alert alert-light border small d-flex flex-wrap align-items-center gap-2">
       <span>
         <strong>Prossimo versamento:</strong> {{ pendingCount }}
-        {{ pendingCount === 1 ? 'libro venduto non ancora versato' : 'libri venduti non ancora versati' }}, incasso
+        {{ pendingCount === 1 ? 'libro venduto o pagato non ancora versato' : 'libri venduti o pagati non ancora versati' }}, incasso
         {{ eur(pendingTotal) }}.
       </span>
-      <RouterLink v-if="pendingCount" :to="{ name: 'books', query: { phase: 9 } }" class="ms-auto">
+      <RouterLink v-if="pendingCount" :to="{ name: 'books', query: { phase: 10 } }" class="ms-auto">
         Seleziona i libri <i class="bi bi-arrow-right"></i>
       </RouterLink>
     </div>
@@ -88,7 +88,7 @@ onMounted(load)
     <div v-if="loading" class="text-center py-5"><div class="spinner-border text-secondary"></div></div>
     <div v-else-if="!donations.length" class="text-center text-secondary py-5">
       <i class="bi bi-heart display-5 d-block mb-2"></i>
-      Nessun versamento. Per crearne uno, seleziona i libri venduti nell'elenco dei libri e premi "Nuovo versamento".
+      Nessun versamento. Per crearne uno, seleziona i libri venduti o pagati nell'elenco dei libri e premi "Nuovo versamento".
     </div>
 
     <div v-for="d in donations" :key="d.id" class="card border-0 shadow-sm mb-3">

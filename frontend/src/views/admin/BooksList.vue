@@ -17,15 +17,18 @@ const phaseFilter = ref(route.query.phase !== undefined ? Number(route.query.pha
 let timer = null
 const router = useRouter()
 
-// --- selezione dei libri venduti per un nuovo versamento ----------------------------
+// --- selezione dei libri venduti o pagati per un nuovo versamento ---------------------
 const SOLD = 9
-const selected = ref([]) // id dei libri venduti selezionati
+const PAID = 10
+const donatable = (b) => b.phase === SOLD || b.phase === PAID
+const selected = ref([]) // id dei libri venduti o pagati selezionati
 const isSelected = (id) => selected.value.includes(id)
 function toggle(id) {
   selected.value = isSelected(id) ? selected.value.filter((x) => x !== id) : [...selected.value, id]
 }
-const soldVisible = computed(() => books.value.filter((b) => b.phase === SOLD))
+const paidVisible = computed(() => books.value.filter((b) => b.phase === PAID))
 const selectedBooks = computed(() => books.value.filter((b) => isSelected(b.id)))
+const selectedUnpaid = computed(() => selectedBooks.value.filter((b) => b.phase === SOLD).length)
 const selectedTotal = computed(() => selectedBooks.value.reduce((t, b) => t + (b.sold_price || 0), 0))
 const eur = (v) => (v ?? 0).toLocaleString('it-IT', { style: 'currency', currency: 'EUR' })
 
@@ -92,9 +95,9 @@ async function load() {
     const data = await api(`/api/admin/books?${params}`)
     books.value = data.books
     counts.value = data.counts
-    // Restano selezionati solo i libri ancora venduti e visibili
-    const sold = new Set(data.books.filter((b) => b.phase === SOLD).map((b) => b.id))
-    selected.value = selected.value.filter((id) => sold.has(id))
+    // Restano selezionati solo i libri ancora venduti o pagati, e visibili
+    const ok = new Set(data.books.filter(donatable).map((b) => b.id))
+    selected.value = selected.value.filter((id) => ok.has(id))
     error.value = ''
   } catch (e) {
     error.value = e.message
@@ -137,17 +140,17 @@ onBeforeUnmount(() => clearInterval(timer))
         {{ statusLabel(s) }} <span class="opacity-75">{{ n }}</span>
       </button>
       <button
-        v-if="soldVisible.length"
+        v-if="paidVisible.length"
         class="btn btn-sm btn-outline-dark rounded-pill ms-auto"
-        title="Seleziona tutti i libri venduti in elenco, per un nuovo versamento"
-        @click="selected = soldVisible.map((b) => b.id)"
+        title="Seleziona tutti i libri pagati in elenco (incasso già accreditato), per un nuovo versamento"
+        @click="selected = paidVisible.map((b) => b.id)"
       >
-        <i class="bi bi-check2-square me-1"></i>Seleziona i venduti ({{ soldVisible.length }})
+        <i class="bi bi-check2-square me-1"></i>Seleziona i pagati ({{ paidVisible.length }})
       </button>
       <select
         v-model="phaseFilter"
         class="form-select form-select-sm w-auto"
-        :class="{ 'ms-auto': !soldVisible.length }"
+        :class="{ 'ms-auto': !paidVisible.length }"
         @change="load"
       >
         <option value="">Tutte le fasi</option>
@@ -171,7 +174,7 @@ onBeforeUnmount(() => clearInterval(timer))
         :class="{ 'list-group-item-warning': isSelected(b.id) }"
       >
         <span
-          v-if="b.phase === SOLD"
+          v-if="donatable(b)"
           class="select-box"
           role="checkbox"
           :aria-checked="isSelected(b.id)"
@@ -235,8 +238,8 @@ onBeforeUnmount(() => clearInterval(timer))
 
     <BaseModal v-if="donationModal" title="Nuovo versamento" @close="closeDonation">
       <p class="small text-secondary">
-        {{ selectedBooks.length }} libri venduti, per un incasso di {{ eur(selectedTotal) }}: dopo il versamento passano
-        alla fase "Versato". Il versamento e la ricevuta saranno visibili sulla pagina pubblica.
+        {{ selectedBooks.length }} libri venduti, per un incasso di {{ eur(selectedTotal) }}<template v-if="selectedUnpaid">
+          (di cui {{ selectedUnpaid }} non ancora pagati)</template>: dopo il versamento passano alla fase "Versato". Il versamento e la ricevuta saranno visibili sulla pagina pubblica.
       </p>
       <div class="row g-2 mb-2">
         <div class="col-6">

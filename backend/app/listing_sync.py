@@ -1,15 +1,18 @@
 """Allinea un libro allo stato del suo annuncio letto dal guardaroba di Vinted:
-fase (pubblicato / nascosto / riservato / venduto) e prezzo. Usato da "Aggiorna"
-nella scheda del libro e dal job periodico del guardaroba."""
+fase (pubblicato / nascosto / riservato / venduto) e prezzo, e dall'ordine
+Vinted l'importo effettivo e il pagamento (fase "Pagato" quando l'acquirente
+conferma la ricezione). Usato da "Aggiorna" nella scheda del libro e dal job
+periodico del guardaroba."""
 
 import json
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.orm import Session
 
 from .db import utcnow
 from .models import Book, PhaseRun
-from .phases import LISTING_PHASE_NUMBERS, LISTING_PHASES, PHASES
+from .phases import LISTING_PHASE_NUMBERS, LISTING_PHASES, PAID_PHASE, PHASES, SOLD_PHASE
 
 if TYPE_CHECKING:
     from vinted.client import Sale
@@ -66,6 +69,39 @@ def needs_sale_price(book: Book, listing: dict[str, Any] | None) -> bool:
     )
 
 
+def needs_order(book: Book, listing: dict[str, Any] | None) -> bool:
+    """Venduto su Vinted di cui va letto l'ordine: per l'importo effettivo (se
+    manca) o per sapere se l'acquirente ha confermato la ricezione (fase Pagato)."""
+    return (
+        listing is not None
+        and listing.get("state") == "sold"
+        and not book.sold_manual
+        and book.phase in LISTING_PHASE_NUMBERS  # non ancora pagato (né versato)
+    )
+
+
+def paid_at(book: Book) -> str | None:
+    """Quando l'incasso è stato accreditato (ISO 8601), se il libro è stato pagato."""
+    return _draft(book).get("paid_at")
+
+
+def _date(iso: str) -> str:
+    try:
+        return datetime.fromisoformat(iso).strftime("%d/%m/%Y")
+    except ValueError:
+        return iso
+
+
+def mark_paid(book: Book, when: str | None = None) -> str:
+    """Porta un libro venduto alla fase Pagato, con la data dell'accredito (quella
+    della conferma su Vinted o, se manca, adesso). Restituisce la data (gg/mm/aaaa)."""
+    draft = _draft(book)
+    draft["paid_at"] = when or utcnow().isoformat(timespec="seconds")
+    book.vinted_draft = json.dumps(draft, ensure_ascii=False)
+    move_to_listing_phase(book, PAID_PHASE)
+    return _date(draft["paid_at"])
+
+
 def _eur(value: float | None) -> str:
     if value is None:
         return "—"
@@ -81,6 +117,8 @@ def apply_listing(
     `sale`: vendita effettiva dall'ordine Vinted, se trovata (vedi vinted_listing.sales)."""
     if book.sold_manual:
         return []  # venduto segnato a mano: vale quello, non lo stato su Vinted
+    if book.phase not in LISTING_PHASE_NUMBERS:
+        return []  # pagato o versato: la vendita è conclusa
     changes: list[str] = []
     state = listing.get("state")
     if state is None:
@@ -119,6 +157,11 @@ def apply_listing(
         if sale.amount != old or sale.is_bundle:
             changes.append(f"prezzo di vendita {_eur(old)} → {_eur(sale.amount)} ({origin})")
 
+    if book.phase == SOLD_PHASE and sale is not None and sale.completed:
+        # L'acquirente ha confermato la ricezione: Vinted accredita l'incasso
+        day = mark_paid(book, sale.completed_at)
+        changes.append(f"Venduto → Pagato (ricezione confermata dall'acquirente il {day})")
+
     if changes:
         db.add(
             PhaseRun(
@@ -136,7 +179,7 @@ def apply_listing(
 
 
 def move_to_listing_phase(book: Book, phase: int) -> None:
-    assert phase in LISTING_PHASE_NUMBERS
+    assert phase in LISTING_PHASE_NUMBERS or phase == PAID_PHASE
     book.phase = phase
     book.status = "idle"
     book.attempts = 0

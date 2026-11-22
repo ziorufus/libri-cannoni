@@ -537,8 +537,14 @@ PHASES: dict[int, Phase] = {
         Phase(6, "Pubblicato", "Annuncio pubblicato e visibile su Vinted."),
         Phase(7, "Nascosto", "Annuncio nascosto su Vinted (\"Mostra di nuovo\" lo rende visibile)."),
         Phase(8, "Riservato", "Annuncio riservato su Vinted: venduto, in attesa di conclusione."),
-        Phase(9, "Venduto", "Libro venduto."),
-        Phase(10, "Versato", "Ricavato versato a Emergency (vedi Versamenti)."),
+        Phase(9, "Venduto", "Libro venduto: su Vinted, in attesa che l'acquirente confermi la ricezione."),
+        Phase(
+            10,
+            "Pagato",
+            "Incasso accreditato: l'acquirente ha confermato la ricezione su Vinted "
+            "(o, per i venduti segnati a mano, \"Segna come pagato\").",
+        ),
+        Phase(11, "Versato", "Ricavato versato a Emergency (vedi Versamenti)."),
     ]
 }
 
@@ -549,10 +555,17 @@ ACTIVE_PHASES = [n for n, p in PHASES.items() if p.handler is not None]
 LISTING_PHASES = {"live": 6, "hidden": 7, "reserved": 8, "sold": 9}
 LISTING_PHASE_NUMBERS = frozenset(LISTING_PHASES.values())
 
-# Ricavato versato a Emergency: si entra e si esce solo dalla pagina Versamenti
+# Pagato: Vinted ha accreditato l'incasso (acquirente che conferma la ricezione,
+# letto dagli ordini) o "Segna come pagato" per i venduti segnati a mano.
+# Versato: si entra e si esce solo dalla pagina Versamenti.
 SOLD_PHASE = LISTING_PHASES["sold"]
-DONATED_PHASE = 10
-MANUAL_ONLY_PHASES = LISTING_PHASE_NUMBERS | {DONATED_PHASE}
+PAID_PHASE = 10
+DONATED_PHASE = 11
+# Libri ceduti, il cui ricavato va (o è andato) a Emergency
+SOLD_PHASES = (SOLD_PHASE, PAID_PHASE, DONATED_PHASE)
+# Si possono includere in un nuovo versamento
+DONATABLE_PHASES = (SOLD_PHASE, PAID_PHASE)
+MANUAL_ONLY_PHASES = LISTING_PHASE_NUMBERS | {PAID_PHASE, DONATED_PHASE}
 
 
 def min_gap_key(phase: int) -> str:
