@@ -137,6 +137,13 @@ onMounted(async () => {
                     <div class="flex-grow-1" style="min-width: 0">
                       <div class="text-break">{{ b.title }}</div>
                       <small v-if="b.sold_at" class="text-secondary">ceduto il {{ fmtDay(b.sold_at) }}</small>
+                      <span
+                        v-if="b.awaiting_payment"
+                        class="badge rounded-pill text-bg-light border fw-normal text-secondary ms-1"
+                        title="L'incasso arriva quando chi ha comprato conferma di aver ricevuto il libro"
+                      >
+                        <i class="bi bi-hourglass-split me-1"></i>in attesa di pagamento
+                      </span>
                     </div>
                     <span class="fw-semibold text-nowrap">{{ eur(b.sold_price) }}</span>
                   </li>

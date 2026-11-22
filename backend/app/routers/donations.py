@@ -45,6 +45,8 @@ def public_book(b: Book) -> dict:
         "sold_price": b.sold_price,
         "sold_at": b.sold_at.date().isoformat() if b.sold_at else None,
         "cover_url": _cover_url(b),
+        # Venduto ma incasso non ancora accreditato (fase Venduto, non Pagato)
+        "awaiting_payment": b.phase == SOLD_PHASE,
     }
 
 
