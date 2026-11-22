@@ -251,7 +251,8 @@ JOBS: dict[str, Job] = {
             "Guardaroba Vinted",
             f"Legge una pagina del guardaroba ({PER_PAGE} annunci) a ogni giro, ricominciando dalla "
             "prima dopo l'ultima, e aggiorna stato (pubblicato, nascosto, riservato, venduto) e "
-            "prezzo dei libri pubblicati.",
+            "prezzo dei libri pubblicati. Per i venduti legge gli ordini Vinted: importo effettivo "
+            "(offerte e lotti compresi) e, quando l'acquirente conferma la ricezione, passaggio a Pagato.",
             sync_wardrobe,
             interval_default=15,
         ),
