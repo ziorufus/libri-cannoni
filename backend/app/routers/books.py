@@ -35,7 +35,7 @@ from ..phases import (
 from ..security import CurrentUser, require_admin
 from ..settings_store import get_setting, paused_phases
 from ..vinted_draft import delete_draft
-from ..vinted_listing import delete_listing, find_listing, sale_prices, set_hidden
+from ..vinted_listing import delete_listing, find_listing, sales, set_hidden
 from ..vinted_search import VintedOpError
 from ..worker import apply_pauses, load_settings
 from ..storage import (
@@ -524,15 +524,15 @@ async def vinted_refresh(book_id: int, db: Session = Depends(get_db), cu: Curren
         message = f"Annuncio {iid} non trovato nel guardaroba di Vinted (cancellato?): nessuna modifica"
     else:
         # Venduto: l'importo effettivo (offerte comprese) è nell'ordine, non nell'annuncio
-        sale_price, note = None, ""
+        sale, note = None, ""
         if needs_sale_price(book, listing):
             try:
-                sale_price = (await asyncio.to_thread(sale_prices, {iid})).get(iid)
+                sale = (await asyncio.to_thread(sales, {iid})).get(iid)
             except VintedOpError as exc:
                 note = f" (prezzo di vendita effettivo non letto: {exc})"
-            if sale_price is None and not note:
+            if sale is None and not note:
                 note = " (ordine non trovato: prezzo di vendita provvisorio, si riprova)"
-        changes = apply_listing(db, book, listing, f"Aggiorna ({cu.email})", sale_price)
+        changes = apply_listing(db, book, listing, f"Aggiorna ({cu.email})", sale)
         message = ("Aggiornato: " + ", ".join(changes) if changes else "Già allineato a Vinted") + note
         db.commit()
         db.expire_all()

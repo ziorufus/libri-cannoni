@@ -8,9 +8,12 @@ Come le altre funzioni Vinted, vanno chiamate in un thread.
 """
 
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .vinted_search import VintedOpError, new_client, wrap_error
+
+if TYPE_CHECKING:
+    from vinted.client import Sale
 
 PER_PAGE = 96  # annunci per pagina del guardaroba (il massimo che usiamo)
 MAX_PAGES = 30
@@ -89,31 +92,35 @@ def set_hidden(item_id: int, hidden: bool) -> None:
 # --- Prezzo effettivo di vendita ------------------------------------------------
 # Il guardaroba riporta solo il prezzo di listino, anche se il libro è stato
 # venduto con un'offerta: l'importo vero è negli ordini venduti, letti da
-# vinted-lister (`client.sale_prices`, come `vinted sold`).
+# vinted-lister (`client.sales`, come `vinted sold`). Un lotto (più annunci
+# comprati insieme con un'unica offerta) ha un solo importo: il pacchetto lo
+# divide tra gli annunci in proporzione ai prezzi di listino.
 #
-# Il pacchetto tiene in memoria, per ogni client, a quali annunci corrisponde una
-# transazione (non cambia mai). Qui si crea un client nuovo a ogni operazione (così
-# i token reimportati valgono subito): gli si passa quindi una cache condivisa.
+# Il pacchetto tiene in memoria, per ogni client, quali annunci (e a che prezzo di
+# listino) contiene una transazione (non cambia mai). Qui si crea un client nuovo a
+# ogni operazione (così i token reimportati valgono subito): gli si passa quindi
+# una cache condivisa.
 
 MAX_TRANSACTIONS = 40  # transazioni nuove lette al massimo per ogni ricerca
-_TX_ITEMS: dict[int, list[int]] = {}  # transaction_id -> id degli annunci
+_TX_ITEMS: dict[int, list[tuple[int, float | None]]] = {}  # transaction_id -> (id annuncio, prezzo di listino)
 
 
-def sale_prices(item_ids: set[int]) -> dict[int, float]:
-    """Importo effettivo di vendita (offerta compresa, senza le commissioni del
-    compratore) degli annunci indicati. Gli annunci non trovati (o venduti in un
-    lotto con altri) mancano dal risultato."""
+def sales(item_ids: set[int]) -> dict[int, "Sale"]:
+    """Vendita effettiva degli annunci indicati: `amount` (offerta compresa, senza
+    le commissioni del compratore; per un lotto la quota dell'annuncio),
+    `bundle_items` e `bundle_total` (annunci e importo del lotto; 1 e `amount` se
+    venduto da solo). Gli annunci non trovati mancano dal risultato."""
     if not item_ids:
         return {}
     client = new_client()
-    if not hasattr(client, "sale_prices"):
+    if not hasattr(client, "sales"):
         raise VintedOpError(
-            "La versione installata di vinted-lister non legge gli ordini venduti: "
+            "La versione installata di vinted-lister non legge gli ordini venduti in lotto: "
             "aggiorna il clone (git pull) e riavvia il backend"
         )
     client._tx_items = _TX_ITEMS  # cache condivisa tra i client (vedi sopra)
     try:
-        return client.sale_prices(item_ids, max_transactions=MAX_TRANSACTIONS)
+        return client.sales(item_ids, max_transactions=MAX_TRANSACTIONS)
     except Exception as exc:
         raise wrap_error("Lettura degli ordini venduti non riuscita", exc) from exc
 
@@ -134,4 +141,4 @@ def delete_listing(item_id: int) -> str:
     return f"Annuncio {item_id} eliminato da Vinted"
 
 
-__all__ = ["STATES", "VintedOpError", "compact", "delete_listing", "find_listing", "listing_state", "sale_prices", "set_hidden", "wardrobe_page"]
+__all__ = ["STATES", "VintedOpError", "compact", "delete_listing", "find_listing", "listing_state", "sales", "set_hidden", "wardrobe_page"]

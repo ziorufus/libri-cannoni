@@ -21,7 +21,7 @@ from .listing_sync import apply_listing, item_id, needs_sale_price
 from .models import Book, JobState
 from .phases import LISTING_PHASE_NUMBERS
 from .vinted_auth import auth_status
-from .vinted_listing import PER_PAGE, sale_prices, wardrobe_page
+from .vinted_listing import PER_PAGE, sales, wardrobe_page
 from .vinted_search import VintedOpError
 
 log = logging.getLogger(__name__)
@@ -170,7 +170,7 @@ def _sold_without_price(listings: list[dict[str, Any]]) -> set[int]:
         }
 
 
-def _sync_page(listings: list[dict[str, Any]], prices: dict[int, float]) -> tuple[int, list[str]]:
+def _sync_page(listings: list[dict[str, Any]], prices: dict[int, Any]) -> tuple[int, list[str]]:
     """Applica una pagina del guardaroba ai libri pubblicati (fasi 6-9)."""
     by_id = {li["id"]: li for li in listings if li.get("id")}
     updated, notes = 0, []
@@ -196,11 +196,11 @@ async def sync_wardrobe(settings: dict[str, Any], previous: dict[str, Any]) -> J
     except VintedOpError as exc:
         return JobResult(False, str(exc), keep)
     # Venduti senza importo effettivo: lo si cerca negli ordini (offerte comprese)
-    prices: dict[int, float] = {}
+    prices: dict[int, Any] = {}  # id annuncio -> vinted.client.Sale
     order_note = ""
     if wanted := await asyncio.to_thread(_sold_without_price, listings):
         try:
-            prices = await asyncio.to_thread(sale_prices, wanted)
+            prices = await asyncio.to_thread(sales, wanted)
         except VintedOpError as exc:
             order_note = f"\nPrezzi di vendita non letti: {exc}"
         if missing := wanted - prices.keys():

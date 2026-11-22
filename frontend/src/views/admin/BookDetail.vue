@@ -532,8 +532,12 @@ onBeforeUnmount(() => clearInterval(timer))
                 <div v-if="book.phase >= 9" class="mt-2">
                   <div class="text-secondary mb-1">
                     Venduto {{ book.sold_at ? fmtDate(book.sold_at) : '' }} · prezzo dell'annuncio {{ fmtPrice(book.price, 'EUR') }}
-                    <template v-if="!book.sold_manual && book.vinted_draft.sold_price_source">
-                      · incasso {{ { order: "dall'ordine Vinted", listing: 'provvisorio (prezzo dell\'annuncio, ordine non ancora trovato)', manual: 'corretto a mano' }[book.vinted_draft.sold_price_source] }}
+                    <template v-if="!book.sold_manual && book.vinted_draft.sold_price_source === 'bundle' && book.vinted_draft.sold_bundle">
+                      · incasso: quota di un lotto Vinted di {{ book.vinted_draft.sold_bundle.items }} articoli venduto a
+                      {{ fmtPrice(book.vinted_draft.sold_bundle.total, 'EUR') }}, divisa in proporzione ai prezzi degli annunci
+                    </template>
+                    <template v-else-if="!book.sold_manual && book.vinted_draft.sold_price_source">
+                      · incasso {{ { order: "dall'ordine Vinted", bundle: 'da un lotto Vinted', listing: 'provvisorio (prezzo dell\'annuncio, ordine non ancora trovato)', manual: 'corretto a mano' }[book.vinted_draft.sold_price_source] }}
                     </template>
                     <template v-if="book.sold_manual">
                       · segnato a mano, {{ LISTING_ACTION_TEXT[book.vinted_draft.listing_action] || 'annuncio non modificato' }}
