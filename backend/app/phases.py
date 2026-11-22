@@ -25,11 +25,11 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Any
 
-from .claude_json import book_condition, book_isbn, book_name, claude_number, claude_value
+from .claude_json import book_condition, book_isbn, book_name, claude_number, claude_value, parse_output
 from .config import config
 from .storage import book_dir
 from .vinted_draft import NO_ISBN, DraftData, create_draft, item_state, publish_draft, render_description
-from .vinted_search import VintedOpError, describe, search_prices
+from .vinted_search import VintedOpError, describe, price_summary, search_prices
 
 log = logging.getLogger(__name__)
 
@@ -114,11 +114,14 @@ def build_prompt(template: str, book: BookSnapshot) -> str:
     return template.replace("{foto}", photos).replace("{note}", notes)
 
 
-async def run_claude(book: BookSnapshot) -> PhaseResult:
+async def call_claude(book: BookSnapshot, prompt: str) -> PhaseResult:
+    """Esegue `claude -p` nella cartella del libro con gli argomenti della fase 1.
+
+    Esito positivo: `output` è la risposta (non vuota). Esito negativo: `error`
+    spiega il problema (si ritenta)."""
     if not config.claude_code_oauth_token:
         return PhaseResult(False, error="CLAUDE_CODE_OAUTH_TOKEN non impostato nel backend")
 
-    prompt = build_prompt(book.settings["claude_prompt"], book)
     args = [config.claude_bin, "-p", *shlex.split(book.settings["claude_extra_args"])]
     env = {**os.environ, "CLAUDE_CODE_OAUTH_TOKEN": config.claude_code_oauth_token}
     timeout = book.settings["claude_timeout_seconds"]
@@ -153,6 +156,14 @@ async def run_claude(book: BookSnapshot) -> PhaseResult:
         return PhaseResult(False, output=out, error=f"Uscita con codice {proc.returncode}: {err or out}"[:4000])
     if not out:
         return PhaseResult(False, error=f"Risposta vuota. {err}"[:4000])
+    return PhaseResult(True, output=out)
+
+
+async def run_claude(book: BookSnapshot) -> PhaseResult:
+    answer = await call_claude(book, build_prompt(book.settings["claude_prompt"], book))
+    if not answer.ok:
+        return answer
+    out = answer.output
     updates = {"claude_output": out}
     # Se l'output è un JSON con il titolo, il libro prende il nome "Titolo - Autore".
     # Se non lo è, la fase riesce comunque e il nome resta vuoto.
@@ -191,15 +202,108 @@ async def search_vinted(book: BookSnapshot) -> PhaseResult:
         )
     except VintedOpError as exc:
         return PhaseResult(False, error=str(exc), retry=not exc.permanent)
+    output = describe(result)
+    if result["items"] and book.settings["vinted_check_enabled"]:
+        # Claude dice quali annunci riguardano davvero il libro: la mediana si
+        # calcola solo su quelli (se nessuno lo è, il prezzo resta vuoto)
+        check = await check_listings(book, isbn, result)
+        if not check.ok:
+            return check
+        output += "\n" + check.output
     # Anche senza risultati la fase è fatta: si salva la ricerca con elenco vuoto.
     # Il prezzo (se manca) è la mediana di Vinted; senza annunci resta vuoto.
     median = (result["summary"] or {}).get("median")
     return PhaseResult(
         True,
-        output=describe(result),
+        output=output,
         updates={"vinted_prices": json.dumps(result, ensure_ascii=False)},
         fill_if_empty=_price_fill(median, book.settings),
     )
+
+
+def _cell(value: Any) -> str:
+    return str(value if value is not None else "").replace("|", "/").replace("\n", " ").strip()
+
+
+def listings_table(items: list[dict[str, Any]]) -> str:
+    """Tabella markdown degli annunci (segnaposto {elenco}), numerati da 1."""
+    rows = ["| n. | Titolo dell'annuncio | Prezzo | Condizioni |", "| --- | --- | --- | --- |"]
+    for n, it in enumerate(items, 1):
+        price = "" if it.get("price") is None else f"{it['price']:g} {it.get('currency') or ''}"
+        rows.append(f"| {n} | {_cell(it.get('title'))} | {_cell(price)} | {_cell(it.get('condition'))} |")
+    return "\n".join(rows)
+
+
+def _compatible_numbers(answer: str, count: int) -> tuple[list[int], str] | None:
+    """Numeri degli annunci compatibili (1..count, senza ripetizioni) e motivo,
+    dal JSON di risposta; None se la risposta non è leggibile."""
+    data = parse_output(answer)
+    if data is None or not isinstance(data.get("compatibili"), list):
+        return None
+    numbers: list[int] = []
+    for v in data["compatibili"]:
+        try:
+            n = int(str(v).strip())
+        except ValueError:
+            continue
+        if 1 <= n <= count and n not in numbers:
+            numbers.append(n)
+    reason = data.get("motivo")
+    return sorted(numbers), str(reason).strip() if reason not in (None, "") else ""
+
+
+async def check_listings(book: BookSnapshot, isbn: str, result: dict[str, Any]) -> PhaseResult:
+    """Chiede a Claude quali annunci di `result` riguardano il libro e aggiorna
+    `result` (in place): `compatible` su ogni annuncio, `summary` sui soli
+    compatibili, `summary_all` su tutti, `check` con l'esito."""
+    s = book.settings
+    items = result["items"]
+    title_author = (
+        book_name(book.claude_output, s["json_title_key"], s["json_author_key"])
+        or (book.description or "").strip()
+        or "(titolo non noto)"
+    )
+    prompt = (
+        s["vinted_check_prompt"]
+        .replace("{titoloautore}", title_author)
+        .replace("{isbn}", isbn)
+        .replace("{elenco}", listings_table(items))
+    )
+    answer = await call_claude(book, prompt)
+    if not answer.ok:
+        return PhaseResult(False, output=answer.output, error=f"Controllo degli annunci con Claude: {answer.error}")
+    parsed = _compatible_numbers(answer.output, len(items))
+    if parsed is None:
+        return PhaseResult(
+            False,
+            output=answer.output,
+            error='Controllo degli annunci: la risposta di Claude non è un JSON con la chiave "compatibili"',
+        )
+    numbers, reason = parsed
+    for n, it in enumerate(items, 1):
+        it["compatible"] = n in numbers
+    compatible = [it for it in items if it["compatible"]]
+    result["summary_all"] = result["summary"]
+    result["summary"] = price_summary(compatible)
+    result["check"] = {"compatible": numbers, "reason": reason, "answer": answer.output}
+    msg = f"Claude: {len(compatible)} annunci compatibili su {len(items)}"
+    if compatible and result["summary"]:
+        msg += f" (mediana {result['summary']['median']:g})"
+    if reason:
+        msg += f" — {reason}"
+    return PhaseResult(True, output=msg)
+
+
+def no_compatible_listings(book) -> str | None:
+    """Motivo dato da Claude se ha scartato tutti gli annunci trovati; None altrimenti."""
+    try:
+        prices = json.loads(book.vinted_prices) if book.vinted_prices else None
+    except ValueError:
+        return None
+    check = (prices or {}).get("check") if isinstance(prices, dict) else None
+    if not isinstance(check, dict) or check.get("compatible"):
+        return None
+    return check.get("reason") or ""
 
 
 def auto_price(value: float | None, minimum: int) -> int | None:
@@ -240,6 +344,12 @@ def require_price(book, settings: dict[str, Any]) -> str | None:
             "Usa \"Usa il prezzo calcolato\" nella sezione Prezzo, o inseriscilo a mano."
         )
     if book_isbn(book.claude_output, settings["json_isbn_key"]):
+        if (reason := no_compatible_listings(book)) is not None:
+            why = f" ({reason})" if reason else ""
+            return (
+                f"Manca il prezzo: nessuno degli annunci trovati su Vinted riguarda questo libro{why}. "
+                "Inserisci il prezzo a mano."
+            )
         return "Manca il prezzo: ISBN presente ma nessun prezzo trovato su Vinted. Inserisci il prezzo a mano."
     return "Manca il prezzo: nessun ISBN e nessun prezzo da Claude. Inserisci il prezzo a mano."
 

@@ -27,7 +27,7 @@ from .vinted_search import VintedOpError
 log = logging.getLogger(__name__)
 
 VINTED_PHASES = (2, 3, 4, 5)  # fasi che chiamano Vinted
-CLAUDE_PHASES = (1,)  # fasi che usano Claude
+CLAUDE_PHASES = (1, 2)  # fasi che usano Claude (la 2 per il controllo degli annunci)
 
 
 @dataclass

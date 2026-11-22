@@ -52,6 +52,25 @@ Rispondi SOLO con un oggetto JSON, senza altro testo, con queste chiavi:
 Se un'informazione non è ricavabile usa null invece di inventarla. \
 Scrivi i testi in italiano."""
 
+DEFAULT_VINTED_CHECK_PROMPT = """\
+Ho cercato su Vinted, tramite l'ISBN, un libro usato per stimarne il prezzo. \
+A volte la ricerca restituisce anche annunci di libri diversi da quello cercato.
+
+Libro cercato: {titoloautore}
+ISBN: {isbn}
+
+Annunci trovati:
+{elenco}
+
+Per ogni annuncio valuta, dal titolo, se riguarda lo stesso libro (la stessa \
+opera dello stesso autore). Scarta gli annunci di altri libri, di raccolte o \
+lotti di più libri e quelli che non permettono di capire di che libro si tratta.
+
+Rispondi SOLO con un oggetto JSON, senza altro testo, con queste chiavi:
+- "compatibili": elenco dei numeri (colonna "n.") degli annunci che riguardano \
+il libro cercato; elenco vuoto se nessuno lo riguarda
+- "motivo": breve spiegazione in italiano"""
+
 
 @dataclass(frozen=True)
 class SettingDef:
@@ -273,12 +292,32 @@ DEFINITIONS: list[SettingDef] = [
         group="Fase 2 · Prezzi Vinted",
     ),
     SettingDef(
+        "vinted_check_enabled",
+        "Controllo degli annunci con Claude",
+        "bool",
+        True,
+        "Se la ricerca trova annunci, Claude indica quali riguardano davvero il libro: la mediana "
+        "si calcola solo su quelli e, se nessuno è compatibile, il prezzo resta da inserire a mano. "
+        "Usa gli stessi argomenti e lo stesso timeout della fase 1.",
+        group="Fase 2 · Prezzi Vinted",
+    ),
+    SettingDef(
+        "vinted_check_prompt",
+        "Prompt per il controllo degli annunci",
+        "text",
+        DEFAULT_VINTED_CHECK_PROMPT,
+        "Segnaposto: {titoloautore} (\"Titolo - Autore\", o solo il titolo), {isbn} e {elenco} "
+        "(tabella degli annunci numerati). La risposta deve essere un JSON con la chiave "
+        "\"compatibili\" (numeri degli annunci) e, facoltativa, \"motivo\".",
+        group="Fase 2 · Prezzi Vinted",
+    ),
+    SettingDef(
         "price_min_euro",
         "Prezzo minimo (euro)",
         "int",
         3,
-        "Al termine della fase 2, se il prezzo è vuoto, viene calcolato: mediana di Vinted se c'è "
-        "l'ISBN, altrimenti prezzo di Claude; arrotondato all'euro e mai sotto questo minimo. "
+        "Al termine della fase 2, se il prezzo è vuoto, viene calcolato: mediana degli annunci Vinted compatibili "
+        "se c'è l'ISBN, altrimenti prezzo di Claude; arrotondato all'euro e mai sotto questo minimo. "
         "Un prezzo inserito a mano non viene mai modificato.",
         min=0,
         max=10000,

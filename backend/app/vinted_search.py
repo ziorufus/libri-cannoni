@@ -106,6 +106,15 @@ def search_prices(text: str, categories: str, conditions: str, limit: int) -> di
     }
 
 
+def price_summary(items: list[dict[str, Any]]) -> dict[str, float] | None:
+    """Min/mediana/max dei prezzi di annunci già compattati (None se nessun prezzo)."""
+    try:
+        from vinted.pricing import price_summary as summary
+    except ImportError as exc:
+        raise VintedOpError("Pacchetto vinted-lister non installato nel virtualenv del backend") from exc
+    return summary(items)
+
+
 def describe(result: dict[str, Any]) -> str:
     """Riga di riepilogo per lo storico delle elaborazioni."""
     items, s = result["items"], result["summary"]

@@ -418,6 +418,18 @@ onBeforeUnmount(() => clearInterval(timer))
               max <strong>{{ fmtPrice(vinted.summary.max, vinted.items[0]?.currency) }}</strong>
             </span>
           </div>
+          <div
+            v-if="vinted.check"
+            class="small mb-2"
+            :class="vinted.check.compatible?.length ? 'text-secondary' : 'text-danger'"
+          >
+            <template v-if="vinted.check.compatible?.length">
+              Claude: {{ vinted.check.compatible.length }} annunci compatibili su {{ vinted.items.length }}
+              (la mediana è calcolata solo su questi)
+            </template>
+            <template v-else>Claude: nessuno degli annunci riguarda questo libro, inserisci il prezzo a mano</template>
+            <template v-if="vinted.check.reason"> — {{ vinted.check.reason }}</template>
+          </div>
           <div v-if="vinted.items.length" class="list-group shadow-sm">
             <a
               v-for="it in vinted.items"
@@ -426,6 +438,8 @@ onBeforeUnmount(() => clearInterval(timer))
               target="_blank"
               rel="noopener"
               class="list-group-item list-group-item-action d-flex gap-3 align-items-baseline small"
+              :class="{ 'text-decoration-line-through text-secondary': it.compatible === false }"
+              :title="it.compatible === false ? 'Scartato da Claude: non riguarda questo libro' : undefined"
             >
               <strong class="text-nowrap" style="min-width: 4.5rem">{{ fmtPrice(it.price, it.currency) }}</strong>
               <span class="flex-grow-1 text-break">{{ it.title }}</span>
