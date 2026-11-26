@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from datetime import timezone
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
@@ -12,8 +13,10 @@ from sqlalchemy.orm import Session, selectinload
 
 from ..claude_json import book_condition, book_isbn, book_name
 from ..db import get_db, utcnow
-from ..models import BOOK_CONDITIONS, Book, Donation, DonationBook, PhaseRun, Photo
+from ..jobs import INBOX_BOOTSTRAP, load_data
+from ..models import BOOK_CONDITIONS, Book, Donation, DonationBook, JobState, PhaseRun, Photo
 from ..listing_sync import (
+    OrderSale,
     _eur as eur,
     apply_listing,
     item_id,
@@ -21,7 +24,9 @@ from ..listing_sync import (
     mark_paid,
     needs_order,
     needs_sale_price,
+    remember_sale,
     set_sold_price_source,
+    stored_sale,
 )
 from ..phases import (
     DONATABLE_PHASES,
@@ -39,7 +44,7 @@ from ..phases import (
 from ..security import CurrentUser, require_admin
 from ..settings_store import get_setting, paused_phases
 from ..vinted_draft import delete_draft
-from ..vinted_listing import delete_listing, find_listing, sales, set_hidden
+from ..vinted_listing import conversation_sales, delete_listing, find_listing, sales_since, set_hidden
 from ..vinted_search import VintedOpError
 from ..worker import apply_pauses, load_settings
 from ..storage import (
@@ -514,6 +519,23 @@ def _manual_run(db: Session, book: Book, cu: CurrentUser, output: str) -> None:
     )
 
 
+async def _read_order(db: Session, book: Book, iid: int, known: OrderSale | None) -> OrderSale | None:
+    """Ordine Vinted dell'annuncio: se la conversazione è già nota la rilegge (una
+    chiamata), altrimenti legge le conversazioni aggiornate dopo l'ultimo giro del
+    job (senza spostarne il segnaposto: le rileggerà anche il job)."""
+    gap = get_setting(db, "vinted_min_interval_seconds")
+    if known is not None and known.conversation_id:
+        found = await asyncio.to_thread(conversation_sales, known.conversation_id, {iid}, gap)
+    else:
+        since = load_data(db.get(JobState, "vinted_wardrobe")).get("inbox_since")
+        if since is None and book.sold_at is not None:
+            start = book.sold_at.replace(tzinfo=book.sold_at.tzinfo or timezone.utc) - INBOX_BOOTSTRAP
+            since = start.isoformat(timespec="seconds")
+        found, _, _ = await asyncio.to_thread(sales_since, since, {iid}, gap, 20)
+    sale = found.get(iid)
+    return remember_sale(book, sale) if sale is not None else known
+
+
 @router.post("/books/{book_id}/vinted-refresh")
 async def vinted_refresh(book_id: int, db: Session = Depends(get_db), cu: CurrentUser = Depends(require_admin)):
     """Legge l'annuncio dal guardaroba di Vinted e allinea fase e prezzo del libro."""
@@ -529,17 +551,17 @@ async def vinted_refresh(book_id: int, db: Session = Depends(get_db), cu: Curren
     else:
         # Venduto: l'importo effettivo (offerte comprese) e la conferma della
         # ricezione (fase Pagato) sono nell'ordine, non nell'annuncio
-        sale, note = None, ""
+        sale, note = stored_sale(book), ""
         if needs_order(book, listing):
             try:
-                sale = (await asyncio.to_thread(sales, {iid})).get(iid)
+                sale = await _read_order(db, book, iid, sale)
             except VintedOpError as exc:
                 note = f" (ordine Vinted non letto: {exc})"
             if sale is None and not note:
                 note = (
-                    " (ordine non trovato: prezzo di vendita provvisorio, si riprova)"
+                    " (ordine non trovato: prezzo di vendita provvisorio, lo cerca il job del guardaroba)"
                     if needs_sale_price(book, listing)
-                    else " (ordine non trovato: pagamento non verificato, si riprova)"
+                    else " (ordine non trovato: pagamento non verificato, lo cerca il job del guardaroba)"
                 )
             elif sale is not None and not sale.completed:
                 note = " (in attesa che l'acquirente confermi la ricezione)"

@@ -12,16 +12,16 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .claude_oauth import ClaudeOAuthError, fetch_usage, refresh
 from .db import SessionLocal, utcnow
-from .listing_sync import apply_listing, item_id, needs_order
+from .listing_sync import apply_listing, item_id, remember_sale, stored_sale
 from .models import Book, JobState
-from .phases import LISTING_PHASE_NUMBERS
+from .phases import LISTING_PHASE_NUMBERS, SOLD_PHASE
 from .vinted_auth import auth_status
-from .vinted_listing import PER_PAGE, sales, wardrobe_page
+from .vinted_listing import PER_PAGE, sales_since, wardrobe_page
 from .vinted_search import VintedOpError
 
 log = logging.getLogger(__name__)
@@ -160,28 +160,48 @@ def _synced_books(db) -> list[Book]:
     )
 
 
-def _sold_without_price(listings: list[dict[str, Any]]) -> set[int]:
-    """Annunci della pagina venduti su Vinted di cui va letto l'ordine (importo
-    effettivo, conferma della ricezione)."""
-    by_id = {li["id"]: li for li in listings if li.get("id")}
+# Primo giro (nessun segnaposto): conversazioni aggiornate da questo margine
+# prima della vendita più vecchia ancora da pagare (o da adesso, se non ce ne sono)
+INBOX_BOOTSTRAP = timedelta(days=2)
+
+
+def _order_targets() -> tuple[set[int], str]:
+    """Annunci dei libri sincronizzati (per riconoscerli negli ordini) e il punto da
+    cui leggere le conversazioni al primo giro."""
     with SessionLocal() as db:
-        return {
-            iid for book in _synced_books(db)
-            if (iid := item_id(book)) is not None and needs_order(book, by_id.get(iid))
-        }
+        books = _synced_books(db)
+        wanted = {iid for book in books if (iid := item_id(book)) is not None}
+        sold = [b.sold_at for b in books if b.phase == SOLD_PHASE and b.sold_at is not None]
+    start = (min(sold) if sold else utcnow()) - INBOX_BOOTSTRAP
+    return wanted, start.replace(tzinfo=start.tzinfo or timezone.utc).isoformat(timespec="seconds")
 
 
-def _sync_page(listings: list[dict[str, Any]], prices: dict[int, Any]) -> tuple[int, list[str]]:
-    """Applica una pagina del guardaroba ai libri pubblicati (fasi 6-9)."""
+def _remember_sales(sales: dict[int, Any]) -> None:
+    """Salva nei libri le vendite lette dagli ordini (applicate da _sync_page)."""
+    if not sales:
+        return
+    with SessionLocal() as db:
+        for book in _synced_books(db):
+            if (sale := sales.get(item_id(book))) is not None:
+                remember_sale(book, sale)
+        db.commit()
+
+
+def _sync_page(listings: list[dict[str, Any]]) -> tuple[int, list[str]]:
+    """Applica ai libri pubblicati (fasi 6-9) la pagina del guardaroba e gli ordini
+    salvati. Un venduto fuori dalla pagina riceve comunque importo e pagamento."""
     by_id = {li["id"]: li for li in listings if li.get("id")}
     updated, notes = 0, []
     with SessionLocal() as db:
         for book in _synced_books(db):
             iid = item_id(book)
             listing = by_id.get(iid)
+            sale = stored_sale(book)
             if listing is None:
-                continue
-            if changes := apply_listing(db, book, listing, "guardaroba Vinted (job)", prices.get(iid)):
+                if book.phase != SOLD_PHASE or sale is None:
+                    continue
+                listing = {"id": iid, "state": "sold", "price": None}  # stato già noto, prezzo invariato
+            if changes := apply_listing(db, book, listing, "guardaroba Vinted (job)", sale):
                 updated += 1
                 notes.append(f"#{book.id}: " + ", ".join(changes))
         db.commit()
@@ -191,28 +211,34 @@ def _sync_page(listings: list[dict[str, Any]], prices: dict[int, Any]) -> tuple[
 async def sync_wardrobe(settings: dict[str, Any], previous: dict[str, Any]) -> JobResult:
     # Una pagina per giro; dopo l'ultima (meno di PER_PAGE annunci) si ricomincia dalla prima
     page = max(1, int(previous.get("next_page") or 1))
-    keep = {"next_page": page}
+    keep = {k: previous[k] for k in ("next_page", "inbox_since") if k in previous}
     try:
         listings = await asyncio.to_thread(wardrobe_page, page)
     except VintedOpError as exc:
         return JobResult(False, str(exc), keep)
-    # Venduti non ancora pagati: importo effettivo (offerte comprese) e conferma negli ordini
-    prices: dict[int, Any] = {}  # id annuncio -> vinted.client.Sale
-    order_note = ""
-    if wanted := await asyncio.to_thread(_sold_without_price, listings):
-        try:
-            prices = await asyncio.to_thread(sales, wanted)
-        except VintedOpError as exc:
-            order_note = f"\nPrezzi di vendita non letti: {exc}"
-        if missing := wanted - prices.keys():
-            order_note += f"\nOrdine non trovato per gli annunci {', '.join(map(str, sorted(missing)))}: si riprova al prossimo giro"
-    updated, notes = await asyncio.to_thread(_sync_page, listings, prices)
+    # Ordini: solo le conversazioni aggiornate dall'ultimo giro (importo effettivo, conferma della ricezione)
+    wanted, start = await asyncio.to_thread(_order_targets)
+    since = previous.get("inbox_since") or start
+    ok, order_note, more = True, "", False
+    try:
+        found, since, more = await asyncio.to_thread(
+            sales_since, since, wanted, settings["vinted_min_interval_seconds"]
+        )
+        await asyncio.to_thread(_remember_sales, found)
+    except VintedOpError as exc:
+        ok, order_note = False, f"\nOrdini non letti (si riprova al prossimo giro): {exc}"
+    updated, notes = await asyncio.to_thread(_sync_page, listings)
     last = len(listings) < PER_PAGE
-    data = {"next_page": 1 if last else page + 1, "page": page, "items": len(listings), "updated": updated}
+    data = {
+        "next_page": 1 if last else page + 1, "page": page, "items": len(listings), "updated": updated,
+        "inbox_since": since,
+    }
     msg = f"Pagina {page}{' (ultima)' if last else ''}: {len(listings)} annunci, {updated} libri aggiornati"
+    if more:
+        msg += "\nAltre conversazioni da leggere: continua al prossimo giro"
     if notes:
         msg += "\n" + "\n".join(notes)
-    return JobResult(True, msg + order_note, data)
+    return JobResult(ok, msg + order_note, data)
 
 
 # --- Registro -----------------------------------------------------------------
@@ -251,8 +277,10 @@ JOBS: dict[str, Job] = {
             "Guardaroba Vinted",
             f"Legge una pagina del guardaroba ({PER_PAGE} annunci) a ogni giro, ricominciando dalla "
             "prima dopo l'ultima, e aggiorna stato (pubblicato, nascosto, riservato, venduto) e "
-            "prezzo dei libri pubblicati. Per i venduti legge gli ordini Vinted: importo effettivo "
-            "(offerte e lotti compresi) e, quando l'acquirente conferma la ricezione, passaggio a Pagato.",
+            "prezzo dei libri pubblicati. Dalle conversazioni aggiornate dall'ultimo giro legge gli "
+            "ordini: importo effettivo (offerte e lotti compresi) e, quando l'acquirente conferma la "
+            "ricezione, passaggio a Pagato. Tra due chiamate agli ordini passa almeno l'attesa "
+            "impostata in \"Vinted: attesa minima tra le chiamate agli ordini\".",
             sync_wardrobe,
             interval_default=15,
         ),

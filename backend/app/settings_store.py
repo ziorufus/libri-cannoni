@@ -432,6 +432,18 @@ DEFINITIONS += [
         group="Job periodici",
     ),
     SettingDef(
+        "vinted_min_interval_seconds",
+        "Vinted: attesa minima tra le chiamate agli ordini (secondi)",
+        "int",
+        5,
+        "Quando legge gli ordini (conversazioni con gli acquirenti) il job del guardaroba, e "
+        "\"Aggiorna\" nella scheda del libro, aspettano almeno questo tempo tra una chiamata a "
+        "Vinted e l'altra, per non farsi bloccare. 0 = nessuna attesa.",
+        min=0,
+        max=120,
+        group="Job periodici",
+    ),
+    SettingDef(
         "claude_pause_session_percent",
         "Claude: pausa oltre questa % della sessione",
         "int",

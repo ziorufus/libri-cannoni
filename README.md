@@ -76,7 +76,7 @@ l'utente di uvicorn deve poter scrivere nel file e nella sua cartella.
 | 7 | Nascosto | "Mostra di nuovo" esegue `vinted unhide` e torna alla 6 |
 | 8 | Riservato | rilevato da "Aggiorna" o dal job del guardaroba |
 | 9 | Venduto | da "Segna come venduto" (con la cifra incassata, `books.sold_price`) o rilevato da Vinted |
-| 10 | Pagato | Vinted ha accreditato l'incasso: l'acquirente ha confermato la ricezione (ordine `completed`, letto da "Aggiorna" o dal job del guardaroba). Per i venduti segnati a mano: "Segna come pagato" |
+| 10 | Pagato | Vinted ha accreditato l'incasso: l'acquirente ha confermato la ricezione (transazione `is_completed` nella conversazione con l'acquirente, letta da "Aggiorna" o dal job del guardaroba, che legge solo le conversazioni aggiornate dall'ultimo giro). Per i venduti segnati a mano: "Segna come pagato" |
 | 11 | Versato | il ricavato è in un versamento a Emergency (pagina **Admin → Versamenti**); eliminando il versamento torna alla 10 (se era pagato) o alla 9 |
 
 Le fasi 6–11 non hanno elaborazioni automatiche e non si cambiano con "Sposta a fase":

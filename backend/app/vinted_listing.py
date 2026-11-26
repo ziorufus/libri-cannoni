@@ -89,11 +89,14 @@ def set_hidden(item_id: int, hidden: bool) -> None:
         raise wrap_error(f"Vinted non ha permesso di {what} l'annuncio", exc) from exc
 
 
-# --- Prezzo effettivo di vendita ------------------------------------------------
+# --- Vendite effettive (importo e pagamento) -------------------------------------
 # Il guardaroba riporta solo il prezzo di listino, anche se il libro è stato
-# venduto con un'offerta: l'importo vero è negli ordini venduti, letti da
-# vinted-lister (`client.sales`, come `vinted sold`). Un lotto (più annunci
-# comprati insieme con un'unica offerta) ha un solo importo: il pacchetto lo
+# venduto con un'offerta: l'importo vero e la conferma della ricezione (che fa
+# accreditare l'incasso) sono nella transazione della conversazione con
+# l'acquirente, letta da vinted-lister (`client.sales_since`, come `vinted sold`).
+# Ogni evento dell'ordine (venduto, spedito, consegnato, ricezione confermata)
+# aggiorna la conversazione: basta leggere quelle aggiornate dall'ultima volta.
+# Un lotto (più annunci comprati insieme) ha un solo importo: il pacchetto lo
 # divide tra gli annunci in proporzione ai prezzi di listino.
 #
 # Il pacchetto tiene in memoria, per ogni client, quali annunci (e a che prezzo di
@@ -101,28 +104,46 @@ def set_hidden(item_id: int, hidden: bool) -> None:
 # ogni operazione (così i token reimportati valgono subito): gli si passa quindi
 # una cache condivisa.
 
-MAX_TRANSACTIONS = 40  # transazioni nuove lette al massimo per ogni ricerca
+MAX_CONVERSATIONS = 40  # conversazioni lette al massimo a ogni giro (le altre al giro dopo)
 _TX_ITEMS: dict[int, list[tuple[int, float | None]]] = {}  # transaction_id -> (id annuncio, prezzo di listino)
 
 
-def sales(item_ids: set[int]) -> dict[int, "Sale"]:
-    """Vendita effettiva degli annunci indicati: `amount` (offerta compresa, senza
-    le commissioni del compratore; per un lotto la quota dell'annuncio),
-    `bundle_items` e `bundle_total` (annunci e importo del lotto; 1 e `amount` se
-    venduto da solo). Gli annunci non trovati mancano dal risultato."""
-    if not item_ids:
-        return {}
+def _orders_client(min_interval: float):
     client = new_client()
-    if not hasattr(client, "sales"):
+    if not hasattr(client, "sales_since"):
         raise VintedOpError(
-            "La versione installata di vinted-lister non legge gli ordini venduti in lotto: "
+            "La versione installata di vinted-lister non legge gli ordini dalle conversazioni: "
             "aggiorna il clone (git pull) e riavvia il backend"
         )
     client._tx_items = _TX_ITEMS  # cache condivisa tra i client (vedi sopra)
+    client.min_interval = max(0.0, float(min_interval))
+    return client
+
+
+def sales_since(
+    since: str | None, wanted: set[int], min_interval: float, max_conversations: int = MAX_CONVERSATIONS
+) -> tuple[dict[int, "Sale"], str | None, bool]:
+    """Vendite degli annunci `wanted` nelle conversazioni aggiornate dopo `since`
+    (ISO 8601): per annuncio `amount` (offerta compresa, senza le commissioni del
+    compratore; per un lotto la quota dell'annuncio), `bundle_items`,
+    `bundle_total`, `completed` (ricezione confermata), `completed_at`,
+    `conversation_id`. Restituisce anche il nuovo `since` e se restano
+    conversazioni da leggere. Tra una chiamata a Vinted e l'altra passano almeno
+    `min_interval` secondi."""
+    client = _orders_client(min_interval)
     try:
-        return client.sales(item_ids, max_transactions=MAX_TRANSACTIONS)
+        return client.sales_since(since, wanted, max_conversations=max_conversations)
     except Exception as exc:
         raise wrap_error("Lettura degli ordini venduti non riuscita", exc) from exc
+
+
+def conversation_sales(conversation_id: int, wanted: set[int], min_interval: float) -> dict[int, "Sale"]:
+    """Rilegge la vendita di una conversazione già nota (vedi sales_since)."""
+    client = _orders_client(min_interval)
+    try:
+        return client.conversation_sales(conversation_id, wanted)
+    except Exception as exc:
+        raise wrap_error("Lettura dell'ordine venduto non riuscita", exc) from exc
 
 
 _NOT_FOUND = re.compile(r"-> 404:")
@@ -141,4 +162,4 @@ def delete_listing(item_id: int) -> str:
     return f"Annuncio {item_id} eliminato da Vinted"
 
 
-__all__ = ["STATES", "VintedOpError", "compact", "delete_listing", "find_listing", "listing_state", "sales", "set_hidden", "wardrobe_page"]
+__all__ = ["STATES", "VintedOpError", "compact", "delete_listing", "find_listing", "conversation_sales", "listing_state", "sales_since", "set_hidden", "wardrobe_page"]

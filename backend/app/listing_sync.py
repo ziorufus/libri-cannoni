@@ -1,10 +1,12 @@
 """Allinea un libro allo stato del suo annuncio letto dal guardaroba di Vinted:
 fase (pubblicato / nascosto / riservato / venduto) e prezzo, e dall'ordine
-Vinted l'importo effettivo e il pagamento (fase "Pagato" quando l'acquirente
-conferma la ricezione). Usato da "Aggiorna" nella scheda del libro e dal job
-periodico del guardaroba."""
+Vinted (la transazione della conversazione con l'acquirente) l'importo
+effettivo e il pagamento (fase "Pagato" quando l'acquirente conferma la
+ricezione). Usato da "Aggiorna" nella scheda del libro e dal job periodico del
+guardaroba."""
 
 import json
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -35,6 +37,52 @@ def _draft(book: Book) -> dict[str, Any]:
     return draft if isinstance(draft, dict) else {}
 
 
+@dataclass(frozen=True)
+class OrderSale:
+    """Vendita letta da un ordine Vinted (vedi vinted.client.Sale), salvata nel
+    libro (`vinted_draft["vinted_order"]`): il job la legge quando la conversazione
+    cambia e la applica anche ai giri in cui l'annuncio non è nella pagina letta."""
+
+    amount: float
+    bundle_items: int = 1
+    bundle_total: float | None = None
+    completed: bool = False
+    completed_at: str | None = None
+    transaction_id: int | None = None
+    conversation_id: int | None = None
+
+    @property
+    def is_bundle(self) -> bool:
+        return self.bundle_items > 1
+
+
+def remember_sale(book: Book, sale: "Sale | OrderSale") -> OrderSale:
+    order = OrderSale(
+        sale.amount, sale.bundle_items, sale.bundle_total, sale.completed,
+        sale.completed_at, sale.transaction_id, sale.conversation_id,
+    )
+    draft = _draft(book)
+    draft["vinted_order"] = asdict(order)
+    book.vinted_draft = json.dumps(draft, ensure_ascii=False)
+    return order
+
+
+def stored_sale(book: Book) -> OrderSale | None:
+    data = _draft(book).get("vinted_order")
+    if not isinstance(data, dict):
+        return None
+    try:
+        return OrderSale(**data)
+    except TypeError:
+        return None
+
+
+def forget_sale(book: Book) -> None:
+    draft = _draft(book)
+    if draft.pop("vinted_order", None) is not None:
+        book.vinted_draft = json.dumps(draft, ensure_ascii=False)
+
+
 def set_sold_price_source(book: Book, source: str | None, bundle: dict[str, Any] | None = None) -> None:
     """Da dove viene il prezzo di vendita: "order" (ordine Vinted, offerta compresa),
     "bundle" (quota di un ordine Vinted con più annunci, divisa in proporzione ai
@@ -49,7 +97,7 @@ def set_sold_price_source(book: Book, source: str | None, bundle: dict[str, Any]
     book.vinted_draft = json.dumps(draft, ensure_ascii=False)
 
 
-def _apply_sale(book: Book, sale: "Sale") -> str:
+def _apply_sale(book: Book, sale: "Sale | OrderSale") -> str:
     """Imposta il prezzo di vendita dall'ordine Vinted; restituisce da dove viene (per lo storico)."""
     book.sold_price = sale.amount
     if sale.is_bundle:
@@ -110,11 +158,12 @@ def _eur(value: float | None) -> str:
 
 
 def apply_listing(
-    db: Session, book: Book, listing: dict[str, Any], worker: str, sale: "Sale | None" = None
+    db: Session, book: Book, listing: dict[str, Any], worker: str, sale: "Sale | OrderSale | None" = None
 ) -> list[str]:
     """Applica stato e prezzo dell'annuncio al libro; restituisce le modifiche fatte
     (vuoto se era già allineato) e, se ce ne sono, le registra nello storico. Non fa commit.
-    `sale`: vendita effettiva dall'ordine Vinted, se trovata (vedi vinted_listing.sales)."""
+    `sale`: vendita effettiva dall'ordine Vinted, se trovata (vedi vinted_listing.sales_since).
+    `listing` con prezzo None lascia il prezzo com'è (libro venduto non letto dal guardaroba)."""
     if book.sold_manual:
         return []  # venduto segnato a mano: vale quello, non lo stato su Vinted
     if book.phase not in LISTING_PHASE_NUMBERS:
@@ -149,6 +198,7 @@ def apply_listing(
             book.sold_price = None
             book.sold_at = None
             set_sold_price_source(book, None)
+            forget_sale(book)  # l'ordine annullato non vale per un'eventuale nuova vendita
         move_to_listing_phase(book, phase)
     elif phase == LISTING_PHASES["sold"] and sale is not None and needs_sale_price(book, listing):
         # Già venduto con il prezzo provvisorio: arriva l'importo dell'ordine
