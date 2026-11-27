@@ -508,15 +508,21 @@ onBeforeUnmount(() => clearInterval(timer))
       <div class="mb-4">
         <div v-if="book.vinted_draft" class="card border-0 shadow-sm">
           <div class="card-body small">
-            <a :href="book.vinted_draft.edit_url" target="_blank" rel="noopener" class="fw-semibold">
-              <i class="bi bi-box-arrow-up-right me-1"></i>Bozza {{ book.vinted_draft.draft_id }}
-            </a>
-            <span class="text-secondary"> · creata {{ fmtRelative(book.vinted_draft.created_at) }}</span>
+            <template v-if="book.vinted_draft.external">
+              <span class="fw-semibold"><i class="bi bi-person-badge me-1"></i>Venduto da un altro account Vinted</span>
+              <span class="text-secondary"> · inserito {{ fmtRelative(book.vinted_draft.imported_at) }}</span>
+            </template>
+            <template v-else>
+              <a :href="book.vinted_draft.edit_url" target="_blank" rel="noopener" class="fw-semibold">
+                <i class="bi bi-box-arrow-up-right me-1"></i>Bozza {{ book.vinted_draft.draft_id }}
+              </a>
+              <span class="text-secondary"> · creata {{ fmtRelative(book.vinted_draft.created_at) }}</span>
+            </template>
             <div class="mt-1">
               <template v-if="listing">
                 <div class="d-flex flex-wrap align-items-center gap-1">
                   <span class="badge me-1" :class="listing.cls"><i class="bi me-1" :class="listing.icon"></i>{{ listing.label }}</span>
-                  <span class="text-secondary">pubblicato {{ fmtRelative(book.vinted_draft.published_at) }} · </span>
+                  <span v-if="!book.vinted_draft.external" class="text-secondary">pubblicato {{ fmtRelative(book.vinted_draft.published_at) }} · </span>
                   <a
                     v-if="!(book.sold_manual && book.vinted_draft.listing_action === 'delete')"
                     :href="book.vinted_draft.item_url"
@@ -551,7 +557,10 @@ onBeforeUnmount(() => clearInterval(timer))
                     <template v-else-if="!book.sold_manual && book.vinted_draft.sold_price_source">
                       · incasso {{ { order: "dall'ordine Vinted", bundle: 'da un lotto Vinted', listing: 'provvisorio (prezzo dell\'annuncio, ordine non ancora trovato)', manual: 'corretto a mano' }[book.vinted_draft.sold_price_source] }}
                     </template>
-                    <template v-if="book.sold_manual">
+                    <template v-if="book.vinted_draft.external">
+                      · incasso scritto a mano (non si sincronizza con Vinted)
+                    </template>
+                    <template v-else-if="book.sold_manual">
                       · segnato a mano, {{ LISTING_ACTION_TEXT[book.vinted_draft.listing_action] || 'annuncio non modificato' }}
                       (non si sincronizza più con Vinted)
                     </template>
@@ -608,7 +617,7 @@ onBeforeUnmount(() => clearInterval(timer))
                 </span>
               </template>
             </div>
-            <div class="text-secondary mt-1">
+            <div v-if="!book.vinted_draft.external" class="text-secondary mt-1">
               {{ fmtPrice(book.vinted_draft.price, book.vinted_draft.currency) }} · {{ book.vinted_draft.category }} ·
               {{ book.vinted_draft.condition }} · {{ book.vinted_draft.language }} · ISBN {{ book.vinted_draft.isbn }} ·
               {{ book.vinted_draft.photos }} foto

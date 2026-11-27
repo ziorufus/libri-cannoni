@@ -85,6 +85,60 @@ async function saveDonation() {
   }
 }
 
+// --- libro venduto da un altro account Vinted: inserito direttamente come pagato ----
+const importModal = ref(false)
+const importForm = ref({ url: '', date: '', amount: '' })
+const importPreview = ref(null)
+const importBusy = ref('') // '' | 'read' | 'save'
+const importError = ref('')
+const todayLocal = () => {
+  const d = new Date()
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10)
+}
+
+function openImport() {
+  importForm.value = { url: '', date: todayLocal(), amount: '' }
+  importPreview.value = null
+  importError.value = ''
+  importModal.value = true
+}
+async function readImport() {
+  if (!importForm.value.url || importBusy.value) return
+  importBusy.value = 'read'
+  importError.value = ''
+  try {
+    importPreview.value = await api('/api/admin/books/vinted-import/preview', {
+      method: 'POST',
+      body: { url: importForm.value.url },
+    })
+  } catch (e) {
+    importPreview.value = null
+    importError.value = e.message
+  } finally {
+    importBusy.value = ''
+  }
+}
+async function saveImport() {
+  const amount = parseAmount(importForm.value.amount)
+  if (!importForm.value.url) return (importError.value = "Incolla il link all'annuncio Vinted")
+  if (!importForm.value.date) return (importError.value = 'Indica la data di vendita')
+  if (Number.isNaN(amount)) return (importError.value = 'Cifra non valida: scrivi un importo come 6,50')
+  importBusy.value = 'save'
+  importError.value = ''
+  try {
+    const book = await api('/api/admin/books/vinted-import', {
+      method: 'POST',
+      body: { url: importForm.value.url, sold_at: importForm.value.date, sold_price: amount },
+    })
+    importModal.value = false
+    router.push({ name: 'book', params: { id: book.id } })
+  } catch (e) {
+    importError.value = e.message
+  } finally {
+    importBusy.value = ''
+  }
+}
+
 const total = computed(() => Object.values(counts.value).reduce((a, b) => a + b, 0))
 
 async function load() {
@@ -124,10 +178,81 @@ onBeforeUnmount(() => clearInterval(timer))
   <div>
     <div class="d-flex align-items-center justify-content-between mb-3">
       <h1 class="h4 mb-0">Libri <span class="text-secondary fw-normal fs-6">({{ total }})</span></h1>
-      <RouterLink :to="{ name: 'book-new' }" class="btn btn-primary d-none d-md-inline-block">
-        <i class="bi bi-camera me-1"></i>Nuovo libro
-      </RouterLink>
+      <div class="d-flex gap-2">
+        <button class="btn btn-outline-primary" title="Inserisci libro venduto su Vinted" @click="openImport">
+          <i class="bi bi-bag-check"></i><span class="d-none d-md-inline ms-1">Inserisci libro venduto su Vinted</span>
+        </button>
+        <RouterLink :to="{ name: 'book-new' }" class="btn btn-primary d-none d-md-inline-block">
+          <i class="bi bi-camera me-1"></i>Nuovo libro
+        </RouterLink>
+      </div>
     </div>
+
+    <BaseModal v-if="importModal" title="Libro venduto su Vinted" @close="importModal = false">
+      <p class="small text-secondary">
+        Per i libri venduti da un altro account Vinted: titolo, descrizione e una foto si leggono dalla pagina
+        dell'annuncio; il libro entra direttamente nella fase <strong>Pagato</strong>.
+      </p>
+      <label class="form-label small mb-1" for="imp-url">Link all'annuncio Vinted</label>
+      <div class="input-group mb-2">
+        <input
+          id="imp-url"
+          v-model.trim="importForm.url"
+          class="form-control"
+          type="url"
+          placeholder="https://www.vinted.it/items/…"
+          @change="importPreview = null"
+          @keyup.enter="readImport"
+        />
+        <button class="btn btn-outline-secondary" :disabled="importBusy || !importForm.url" @click="readImport">
+          <span v-if="importBusy === 'read'" class="spinner-border spinner-border-sm me-1"></span>Leggi annuncio
+        </button>
+      </div>
+      <div v-if="importPreview" class="d-flex gap-3 align-items-start border rounded p-2 mb-3">
+        <img
+          v-if="importPreview.image_url"
+          :src="importPreview.image_url"
+          alt=""
+          referrerpolicy="no-referrer"
+          style="width: 72px; height: 96px; object-fit: cover"
+          class="rounded flex-shrink-0"
+        />
+        <div class="small">
+          <div class="fw-semibold">{{ importPreview.title }}</div>
+          <div class="text-secondary">
+            Prezzo dell'annuncio {{ importPreview.price != null ? eur(importPreview.price) : '—' }}
+            <template v-if="importPreview.condition"> · {{ importPreview.condition }}</template>
+          </div>
+          <div v-if="importPreview.is_closed === false" class="text-warning-emphasis">
+            <i class="bi bi-exclamation-triangle me-1"></i>Su Vinted l'annuncio non risulta venduto
+          </div>
+          <div v-if="importPreview.existing_book_id" class="text-danger">
+            <i class="bi bi-exclamation-octagon me-1"></i>Già collegato al
+            <RouterLink :to="{ name: 'book', params: { id: importPreview.existing_book_id } }">libro n. {{ importPreview.existing_book_id }}</RouterLink>
+          </div>
+        </div>
+      </div>
+      <div class="row g-2">
+        <div class="col-6">
+          <label class="form-label small mb-1" for="imp-date">Data di vendita</label>
+          <input id="imp-date" v-model="importForm.date" class="form-control" type="date" />
+        </div>
+        <div class="col-6">
+          <label class="form-label small mb-1" for="imp-price">Cifra incassata</label>
+          <div class="input-group">
+            <input id="imp-price" v-model="importForm.amount" class="form-control" inputmode="decimal" placeholder="es. 6,50" />
+            <span class="input-group-text">€</span>
+          </div>
+        </div>
+      </div>
+      <div v-if="importError" class="alert alert-danger py-2 small mt-3 mb-0">{{ importError }}</div>
+      <template #footer>
+        <button class="btn btn-light" @click="importModal = false">Annulla</button>
+        <button class="btn btn-primary" :disabled="!!importBusy || !!importPreview?.existing_book_id" @click="saveImport">
+          <span v-if="importBusy === 'save'" class="spinner-border spinner-border-sm me-1"></span>Inserisci come pagato
+        </button>
+      </template>
+    </BaseModal>
 
     <div class="d-flex flex-wrap gap-2 mb-3 align-items-center">
       <button

@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from datetime import timezone
+from datetime import date, datetime, time, timezone
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
@@ -45,6 +45,7 @@ from ..security import CurrentUser, require_admin
 from ..settings_store import get_setting, paused_phases
 from ..vinted_draft import delete_draft
 from ..vinted_listing import conversation_sales, delete_listing, find_listing, sales_since, set_hidden
+from ..vinted_item_page import VintedItemPage, fetch_image, fetch_item
 from ..vinted_search import VintedOpError
 from ..worker import apply_pauses, load_settings
 from ..storage import (
@@ -653,6 +654,131 @@ def mark_book_paid(book_id: int, db: Session = Depends(get_db), cu: CurrentUser 
     db.commit()
     db.expire_all()
     return _book_detail(_load(db, book_id), db)
+
+
+# --- libro venduto da un altro account Vinted: inserito direttamente come pagato ----
+
+def _external_item(db: Session, item_id: int) -> Book | None:
+    """Libro già collegato a questo annuncio Vinted (importato o pubblicato da qui)."""
+    candidates = db.scalars(select(Book).where(Book.vinted_draft.like(f"%{item_id}%"))).all()
+    for b in candidates:
+        draft = _json_column(b.vinted_draft) or {}
+        if str(draft.get("item_id")) == str(item_id) or str(draft.get("draft_id")) == str(item_id):
+            return b
+    return None
+
+
+def _vinted_item_out(item: VintedItemPage, existing: Book | None) -> dict:
+    return {
+        "item_id": item.item_id,
+        "url": item.url,
+        "title": item.title,
+        "description": item.description,
+        "price": item.price,
+        "currency": item.currency,
+        "condition": item.condition,
+        "is_closed": item.is_closed,
+        "image_url": item.image_url,
+        "existing_book_id": existing.id if existing else None,
+    }
+
+
+async def _read_vinted_item(url: str) -> VintedItemPage:
+    try:
+        return await asyncio.to_thread(fetch_item, url)
+    except VintedOpError as exc:
+        raise HTTPException(400 if exc.permanent else 502, str(exc)) from exc
+
+
+class VintedItemIn(BaseModel):
+    url: str = Field(min_length=1, max_length=2000)
+
+
+@router.post("/books/vinted-import/preview")
+async def vinted_import_preview(body: VintedItemIn, db: Session = Depends(get_db), _: CurrentUser = Depends(require_admin)):
+    """Legge l'annuncio dalla pagina pubblica di Vinted, senza salvare nulla."""
+    item = await _read_vinted_item(body.url)
+    return _vinted_item_out(item, _external_item(db, item.item_id))
+
+
+class VintedImportIn(VintedItemIn):
+    sold_at: date
+    sold_price: float = Field(ge=0, le=100000)
+
+
+@router.post("/books/vinted-import", status_code=201)
+async def vinted_import(body: VintedImportIn, db: Session = Depends(get_db), cu: CurrentUser = Depends(require_admin)):
+    """Inserisce un libro venduto su un altro account Vinted, già nella fase Pagato:
+    titolo, descrizione, condizioni e una foto dalla pagina dell'annuncio, data e
+    cifra incassata scritte a mano. Non si sincronizza con Vinted (venduto a mano,
+    senza bozza collegata a questo account)."""
+    item = await _read_vinted_item(body.url)
+    if (existing := _external_item(db, item.item_id)) is not None:
+        raise HTTPException(409, f"L'annuncio {item.item_id} è già collegato al libro n. {existing.id}")
+    if not item.image_url:
+        raise HTTPException(400, "Nella pagina Vinted non c'è nessuna foto dell'annuncio")
+    try:
+        image = await asyncio.to_thread(fetch_image, item.image_url)
+    except VintedOpError as exc:
+        raise HTTPException(400 if exc.permanent else 502, str(exc)) from exc
+
+    condition = item.condition.strip().lower()
+    condition = condition if condition in BOOK_CONDITIONS else None
+    sold_at = datetime.combine(body.sold_at, time(12, 0), tzinfo=timezone.utc)
+    now = utcnow().isoformat(timespec="seconds")
+    book = Book(
+        description=item.title,
+        notes=f"Venduto da un altro account Vinted: {item.url}" + (f"\n\n{item.description}" if item.description else ""),
+        condition=condition,
+        condition_manual=condition is not None,
+        price=item.price,
+        sold_price=round(body.sold_price, 2),
+        sold_at=sold_at,
+        sold_manual=True,
+        created_by=cu.email,
+        vinted_draft=json.dumps(
+            {
+                # Niente draft_id: nessuna azione su Vinted (l'annuncio è di un altro account)
+                "external": True,
+                "item_id": item.item_id,
+                "item_url": item.url,
+                "seller_id": item.seller_id,
+                "price": item.price,
+                "currency": item.currency,
+                "is_closed": item.is_closed,
+                "imported_at": now,
+                "sold_price_source": "manual",
+                "listing_action": "none",
+            },
+            ensure_ascii=False,
+        ),
+    )
+    mark_paid(book, sold_at.isoformat(timespec="seconds"))  # fase Pagato, ferma
+    db.add(book)
+    db.flush()  # assegna l'ID
+    try:
+        saved = save_photos(book.id, [image], get_setting(db, "photo_max_side"))
+    except InvalidPhoto as exc:
+        db.rollback()
+        delete_book_files(book.id)
+        raise HTTPException(400, f"Foto di Vinted non valida: {exc}") from exc
+    except Exception:
+        db.rollback()
+        delete_book_files(book.id)
+        raise
+    for s in saved:
+        db.add(Photo(book_id=book.id, **s.__dict__))
+    closed = {True: "", False: " · attenzione: su Vinted l'annuncio non risulta chiuso", None: ""}[item.is_closed]
+    _manual_run(
+        db,
+        book,
+        cu,
+        f"Inserito come venduto da un altro account Vinted ({item.url}): {eur(book.sold_price)} incassati "
+        f"il {body.sold_at.strftime('%d/%m/%Y')}{closed}",
+    )
+    db.commit()
+    db.expire_all()
+    return _book_detail(_load(db, book.id), db)
 
 
 class PhaseReset(BaseModel):
